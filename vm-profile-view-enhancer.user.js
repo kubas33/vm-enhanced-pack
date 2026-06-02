@@ -36,8 +36,12 @@
     'Asekuracja',
     'Ustawianie się do bloku',
     'Blok',
-    'Blok pasywny'
+    'Blok pasywny',
+    'Odporność na stres',
+    'Wytrzymałość'
   ];
+
+  var SPECIAL_SCALE_ATTRIBUTES = makeSet(['Odporność na stres', 'Wytrzymałość']);
 
   var POSITION_RULES = {
     'Atakujący': {
@@ -99,6 +103,27 @@
       return 'vmp-grade-very-good';
     }
     return 'vmp-grade-elite';
+  }
+
+  function getSpecialGradeClass(value) {
+    if (value < 20) {
+      return 'vmp-special-low';
+    }
+    if (value < 35) {
+      return 'vmp-special-medium';
+    }
+    if (value < 45) {
+      return 'vmp-special-high';
+    }
+    return 'vmp-special-elite';
+  }
+
+  function getAttributeGradeClass(attribute) {
+    if (SPECIAL_SCALE_ATTRIBUTES[attribute.name]) {
+      return getSpecialGradeClass(attribute.value);
+    }
+
+    return getGradeClass(attribute.value);
   }
 
   function injectStyles() {
@@ -185,6 +210,10 @@
       '.vmp-grade-good, .vmp-grade-good span, .vmp-grade-good .link { color: #73d87a !important; }',
       '.vmp-grade-very-good, .vmp-grade-very-good span, .vmp-grade-very-good .link { color: #4bd6d6 !important; }',
       '.vmp-grade-elite, .vmp-grade-elite span, .vmp-grade-elite .link { color: #ff76d6 !important; }',
+      '.vmp-special-low, .vmp-special-low span, .vmp-special-low .link { color: #d98b61 !important; }',
+      '.vmp-special-medium, .vmp-special-medium span, .vmp-special-medium .link { color: #ffd45c !important; }',
+      '.vmp-special-high, .vmp-special-high span, .vmp-special-high .link { color: #73d87a !important; }',
+      '.vmp-special-elite, .vmp-special-elite span, .vmp-special-elite .link { color: #ff76d6 !important; }',
       '@media (max-width: 760px) {',
       '  .vmp-panel-grid { gap: 5px; }',
       '  .vmp-panel-item { font-size: 10px; }',
@@ -291,7 +320,11 @@
       'vmp-grade-solid',
       'vmp-grade-good',
       'vmp-grade-very-good',
-      'vmp-grade-elite'
+      'vmp-grade-elite',
+      'vmp-special-low',
+      'vmp-special-medium',
+      'vmp-special-high',
+      'vmp-special-elite'
     ];
 
     markers.forEach(function (marker) {
@@ -489,7 +522,7 @@
     attributes.forEach(function (attribute) {
       var importance = getImportance(position, attribute.name);
 
-      attribute.valueCell.classList.add('vmp-value', getGradeClass(attribute.value));
+      attribute.valueCell.classList.add('vmp-value', getAttributeGradeClass(attribute));
 
       if (importance === 'primary') {
         attribute.row.classList.add('vmp-row-primary');
