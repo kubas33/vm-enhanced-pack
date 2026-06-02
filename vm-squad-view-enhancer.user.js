@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Squad View Enhancer
 // @namespace    https://vm-manager.org/
-// @version      0.1.9
+// @version      0.1.10
 // @description  Enhances VM Manager squad view with training progress and position fit.
 // @match        *://*.vm-manager.org/*
 // @grant        none
@@ -25,6 +25,7 @@
 
   var STYLE_ID = 'vms-style';
   var HEADER_CLASS = 'vms-training-header';
+  var HEADER_SPACER_CLASS = 'vms-nationality-header';
   var FIT_HEADER_CLASS = 'vms-fit-header';
   var CELL_CLASS = 'vms-training-cell';
   var FIT_CELL_CLASS = 'vms-fit-cell';
@@ -296,6 +297,9 @@
       '.vms-training-header {',
       '  color: #d7edf8;',
       '}',
+      '.vms-nationality-header {',
+      '  color: #d7edf8;',
+      '}',
       '.vms-fit-header {',
       '  color: #d7edf8;',
       '}',
@@ -391,7 +395,7 @@
       '.vms-training-wrap {',
       '  display: inline-flex;',
       '  align-items: center;',
-      '  justify-content: center;',
+      '  justify-content: flex-start;',
       '  gap: 4px;',
       '  width: 58px;',
       '  min-width: 58px;',
@@ -757,6 +761,37 @@
     parent.insertBefore(panel, table);
   }
 
+  function ensureNationalityHeader(row) {
+    var cells = Array.prototype.slice.call(row.children);
+    var i;
+    var playerHeaderCell;
+    var spacerCell;
+
+    if (row.querySelector('.' + HEADER_SPACER_CLASS)) {
+      return false;
+    }
+
+    for (i = 0; i < cells.length; i += 1) {
+      if (normalizeText(cells[i].textContent) === 'Zawodnik') {
+        playerHeaderCell = cells[i];
+        break;
+      }
+    }
+
+    if (!playerHeaderCell) {
+      return false;
+    }
+
+    spacerCell = playerHeaderCell.ownerDocument.createElement('td');
+    spacerCell.className = playerHeaderCell.className + ' ' + HEADER_SPACER_CLASS;
+    spacerCell.setAttribute('width', '24');
+    spacerCell.setAttribute('align', 'center');
+    spacerCell.innerHTML = '<b>&nbsp;</b>';
+    playerHeaderCell.parentNode.insertBefore(spacerCell, playerHeaderCell.nextSibling);
+
+    return true;
+  }
+
   function enhanceHeaderRow(row) {
     var cells = Array.prototype.slice.call(row.children);
     var i;
@@ -764,12 +799,19 @@
     var heightHeaderCell;
     var fitCell;
     var trainingCell;
+    var addedNationalityHeader;
+
+    addedNationalityHeader = ensureNationalityHeader(row);
 
     if (row.querySelector('.' + HEADER_CLASS) && row.querySelector('.' + FIT_HEADER_CLASS)) {
+      if (addedNationalityHeader) {
+        incrementTableColspans(row.closest('table'), 3);
+      }
       enhanceFilterPanel(row);
       return;
     }
 
+    cells = Array.prototype.slice.call(row.children);
     for (i = 0; i < cells.length; i += 1) {
       if (normalizeText(cells[i].textContent) === 'Forma') {
         formHeaderCell = cells[i];
@@ -800,7 +842,7 @@
       formHeaderCell.parentNode.insertBefore(trainingCell, formHeaderCell.nextSibling);
     }
 
-    incrementTableColspans(row.closest('table'), 2);
+    incrementTableColspans(row.closest('table'), 3);
     enhanceFilterPanel(row);
   }
 
