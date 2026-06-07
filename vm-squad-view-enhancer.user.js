@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Squad View Enhancer
 // @namespace    https://vm-manager.org/
-// @version      0.1.13
+// @version      0.1.14
 // @description  Enhances VM Manager squad view with training progress and position fit.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -691,9 +691,66 @@
     return active;
   }
 
+  function isTransferListDocument(documentRef) {
+    var rows;
+    var i;
+    var cellTexts;
+
+    if (documentRef.getElementById('search_count') || documentRef.getElementById('1_search_panel')) {
+      return true;
+    }
+
+    rows = Array.prototype.slice.call(documentRef.querySelectorAll('tr'));
+    for (i = 0; i < rows.length; i += 1) {
+      cellTexts = Array.prototype.slice.call(rows[i].children).map(function (cell) {
+        return normalizeText(cell.textContent);
+      });
+
+      if (cellTexts.indexOf('Cena') !== -1 &&
+        cellTexts.indexOf('SilaS') !== -1 &&
+        cellTexts.indexOf('Pensja') === -1 &&
+        cellTexts.indexOf('Wzrost') === -1) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  function isSquadPlayerRow(row) {
+    var link = findPlayerLinkCell(row);
+    var text = normalizeText(row.textContent);
+
+    if (!link || !row.children[link.index + 5] || text.indexOf('€') === -1) {
+      return false;
+    }
+
+    return !row.querySelector('font.green_small');
+  }
+
+  function cleanupSquadEnhancements(documentRef) {
+    Array.prototype.slice.call(documentRef.querySelectorAll('.' + FILTER_PANEL_CLASS)).forEach(function (panel) {
+      panel.remove();
+    });
+
+    Array.prototype.slice.call(documentRef.querySelectorAll('tr')).forEach(function (row) {
+      if (row.style.display === 'none' && getPlayerIdFromRow(row)) {
+        row.style.display = '';
+      }
+    });
+
+    documentRef.body.removeAttribute(SQUAD_SIGNATURE_ATTR);
+    documentRef.body.removeAttribute('data-vms-sort-key');
+    documentRef.body.removeAttribute('data-vms-sort-direction');
+  }
+
   function applyPositionFilter(documentRef) {
     var active = getActivePositionFilters(documentRef);
     var rows = findSquadPlayerRows(documentRef);
+
+    if (!rows.length) {
+      return;
+    }
 
     rows.forEach(function (row) {
       var block = getPlayerBlock(row);
@@ -965,6 +1022,7 @@
       });
 
       return cellTexts.indexOf('Forma') !== -1 &&
+        cellTexts.indexOf('Wzrost') !== -1 &&
         cellTexts.some(function (text) { return text.indexOf('Zawodnik') !== -1; }) &&
         cellTexts.some(function (text) { return text.indexOf('Pensja') !== -1; }) &&
         cellTexts.some(function (text) { return text.indexOf('Wartość') !== -1; });
@@ -974,11 +1032,7 @@
   function findSquadPlayerRows(documentRef) {
     var rows = Array.prototype.slice.call(documentRef.querySelectorAll('tr'));
 
-    return rows.filter(function (row) {
-      var link = findPlayerLinkCell(row);
-      var text = normalizeText(row.textContent);
-      return Boolean(link && row.children[link.index + 5] && text.indexOf('€') !== -1);
-    });
+    return rows.filter(isSquadPlayerRow);
   }
 
   function stabilizePlayerRowWidths(row, linkInfo) {
@@ -1327,11 +1381,22 @@
 
   function enhanceSquad() {
     var documentRef = root.document;
-    var headerRows = findHeaderRows(documentRef);
-    var playerRows = findSquadPlayerRows(documentRef);
+    var headerRows;
+    var playerRows;
     var signature;
 
+    if (isTransferListDocument(documentRef)) {
+      cleanupSquadEnhancements(documentRef);
+      return;
+    }
+
+    headerRows = findHeaderRows(documentRef);
+    playerRows = findSquadPlayerRows(documentRef);
+
     if (!headerRows.length || !playerRows.length) {
+      if (!headerRows.length) {
+        cleanupSquadEnhancements(documentRef);
+      }
       return;
     }
 
@@ -1387,6 +1452,8 @@
     parseTrainingPlayerDataFromHtml: parseTrainingPlayerDataFromHtml,
     parseSquadPlayerIdsFromHtml: parseSquadPlayerIdsFromHtml,
     parseTrainingPercentMapFromHtml: parseTrainingPercentMapFromHtml,
+    isTransferListDocument: isTransferListDocument,
+    isSquadPlayerRow: isSquadPlayerRow,
     start: start
   };
 }));
