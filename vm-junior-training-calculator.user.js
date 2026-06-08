@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Volleyball junior training calculator
 // @namespace    https://vm-manager.org/
-// @version      0.3.3
+// @version      0.4.0
 // @description  Projects junior academy skill growth with comparable allocation strategies.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -32,7 +32,11 @@
   var DEFAULT_STRATEGIES = ['priority', 'roundRobin'];
   var SCHEDULE_CACHE_KEY = 'vjtc.matchesSchedule.v3';
   var SCHEDULE_CACHE_TTL_MS = 5 * 60 * 1000;
+  var POOL_CACHE_KEY = 'vjtc.juniorTrainingPool.v1';
+  var POOL_CACHE_TTL_MS = 5 * 60 * 1000;
+  var TRAINING_URL = '/Ajax_handler.php?phpsite=view_body.php&action=Training';
   var schedulePromise = null;
+  var trainingPoolPromise = null;
 
   var SKILL_OPTIONS = [
     { code: 'UM_PRZYJECIE', label: 'Przyjecie' },
@@ -91,7 +95,9 @@
       + '.vjtc-results th{background:rgba(93,176,225,.12);}'
       + '.vjtc-ok{color:#7dffb0;}'
       + '.vjtc-miss{color:#ffb36b;}'
-      + '.vjtc-meta{margin-top:6px;color:#9ec7de;font-size:10px;}';
+      + '.vjtc-meta{margin-top:6px;color:#9ec7de;font-size:10px;}'
+      + '.vjtc-scout-subtitle{margin:0 0 8px;color:#b8d9ec;font-size:11px;}'
+      + '.vjtc-mode-scout .vjtc-player-row,.vjtc-mode-scout .vjtc-refresh-skill{display:none;}';
     document.head.appendChild(style);
   }
 
@@ -166,7 +172,15 @@
     return row;
   }
 
+  function getScoutCandidate(panel) {
+    return panel && panel._vjtcScoutCandidate ? panel._vjtcScoutCandidate : null;
+  }
+
   function getActivePlayer(panel, form) {
+    if (panel && panel.dataset.vjtcMode === 'scout') {
+      return getScoutCandidate(panel);
+    }
+
     var select = panel.querySelector('#vjtc-player');
     if (!select || !select.value) {
       return null;
@@ -393,6 +407,111 @@
     }
   }
 
+  function readPoolCache() {
+    try {
+      var raw = window.sessionStorage.getItem(POOL_CACHE_KEY);
+      if (!raw) {
+        return null;
+      }
+
+      var cached = JSON.parse(raw);
+      if (!cached || Date.now() - cached.savedAt > POOL_CACHE_TTL_MS) {
+        return null;
+      }
+
+      return cached.data;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function writePoolCache(data) {
+    try {
+      window.sessionStorage.setItem(POOL_CACHE_KEY, JSON.stringify({
+        savedAt: Date.now(),
+        data: data,
+      }));
+    } catch (error) {
+      // ignore storage failures
+    }
+  }
+
+  function fetchJuniorTrainingPool() {
+    var cached = readPoolCache();
+
+    if (cached) {
+      return Promise.resolve(cached);
+    }
+
+    if (trainingPoolPromise) {
+      return trainingPoolPromise;
+    }
+
+    trainingPoolPromise = window.fetch(TRAINING_URL)
+      .then(function (response) {
+        if (!response.ok) {
+          throw new Error('Training fetch failed with status ' + response.status);
+        }
+        return response.text();
+      })
+      .then(function (text) {
+        var html = parser.parseAjaxVmBody(text);
+        var poolData = parser.parseJuniorTrainingPoolFromHtml(html, sim.CONFIG.poolCap);
+
+        if (!poolData) {
+          throw new Error('Junior training pool not found in Training response');
+        }
+
+        writePoolCache(poolData);
+        return poolData;
+      })
+      .finally(function () {
+        trainingPoolPromise = null;
+      });
+
+    return trainingPoolPromise;
+  }
+
+  function applyPoolDataToPanel(panel, poolData, hintText) {
+    var poolInput = panel.querySelector('#vjtc-pool');
+    var hint = panel.querySelector('#vjtc-pool-hint');
+
+    if (!poolData || !poolInput || document.activeElement === poolInput) {
+      return;
+    }
+
+    poolInput.value = String(poolData.current);
+    poolInput.max = String(Math.min(poolData.max, sim.CONFIG.poolCap));
+
+    if (hint && hintText) {
+      hint.textContent = hintText;
+    }
+  }
+
+  function refreshPoolFromTrainingAjax(panel) {
+    var hint = panel.querySelector('#vjtc-pool-hint');
+
+    if (hint) {
+      hint.textContent = 'Pobieram pule juniorow...';
+    }
+
+    return fetchJuniorTrainingPool()
+      .then(function (poolData) {
+        applyPoolDataToPanel(
+          panel,
+          poolData,
+          'Aut. z treningu juniorow: ' + poolData.current + '/' + poolData.max
+        );
+        return poolData;
+      })
+      .catch(function () {
+        if (hint) {
+          hint.textContent = 'Nie udalo sie pobrac puli juniorow — ustaw recznie (max ' + sim.CONFIG.poolCap + ').';
+        }
+        return null;
+      });
+  }
+
   function refreshDaysLeftFromSchedule(panel) {
     return fetchSeasonScheduleData()
       .then(function (data) {
@@ -494,6 +613,7 @@
     panel = document.createElement('div');
     panel.id = PANEL_ID;
     panel.className = 'vjtc-panel';
+    panel.dataset.vjtcMode = 'training';
 
     var poolData = parseTrainingPoolFromForm(form);
     var defaultPool = poolData ? poolData.current : 0;
@@ -513,7 +633,8 @@
       + '<label>Wiek<input id="vjtc-age" type="number" min="14" max="18" step="1" value="16"></label>'
       + '<label>Dni do konca sezonu<input id="vjtc-days-left" type="number" min="0" step="1" value="45">'
       + '<span class="vjtc-field-hint" id="vjtc-days-left-hint"></span></label>'
-      + '<label>Pula pkt<input id="vjtc-pool" type="number" min="0" max="40" step="1" value="' + escapeHtml(defaultPool) + '"></label>'
+      + '<label>Pula pkt<input id="vjtc-pool" type="number" min="0" max="' + escapeHtml(sim.CONFIG.poolCap) + '" step="1" value="' + escapeHtml(defaultPool) + '">'
+      + '<span class="vjtc-field-hint" id="vjtc-pool-hint"></span></label>'
       + '<label>Dni sezonu<input id="vjtc-season-days" type="number" min="1" step="1" value="' + escapeHtml(sim.CONFIG.seasonDays) + '"></label>'
       + '</div>'
       + '<p class="vjtc-hint">Kolejnosc umiejetnosci = priorytet strategii „Priorytet” (▲▼).</p>'
@@ -678,14 +799,202 @@
 
   function refreshPoolFromForm(panel, form) {
     var poolData = parseTrainingPoolFromForm(form);
-    var poolInput = panel.querySelector('#vjtc-pool');
+    var hint = panel.querySelector('#vjtc-pool-hint');
 
-    if (!poolData || !poolInput || document.activeElement === poolInput) {
+    if (!poolData) {
       return;
     }
 
-    poolInput.value = String(poolData.current);
-    poolInput.max = String(Math.min(poolData.max, sim.CONFIG.poolCap));
+    applyPoolDataToPanel(
+      panel,
+      poolData,
+      'Z formularza treningu juniorow: ' + poolData.current + '/' + poolData.max
+    );
+  }
+
+  function buildScoutSubtitle(candidate) {
+    var parts = [candidate.name || 'Kandydat'];
+
+    if (candidate.age != null) {
+      parts.push(candidate.age + ' lat');
+    }
+
+    if (candidate.position) {
+      parts.push(candidate.position);
+    }
+
+    return parts.join(' · ');
+  }
+
+  function buildScoutSignature(candidate) {
+    return [
+      candidate.name || '',
+      candidate.age == null ? '' : String(candidate.age),
+      candidate.position || '',
+      Object.keys(candidate.attributes || {}).sort().map(function (code) {
+        return code + ':' + candidate.attributes[code];
+      }).join('|'),
+    ].join('#');
+  }
+
+  function loadScoutCandidateIntoPanel(panel, candidate) {
+    var ageInput = panel.querySelector('#vjtc-age');
+    var subtitle = panel.querySelector('#vjtc-scout-subtitle');
+
+    panel._vjtcScoutCandidate = candidate;
+
+    if (ageInput && candidate.age != null) {
+      ageInput.value = String(candidate.age);
+    }
+
+    if (subtitle) {
+      subtitle.textContent = buildScoutSubtitle(candidate);
+    }
+
+    setSkillRows(panel, parser.getTrainableSkills(candidate.attributes), null);
+  }
+
+  function findScoutPanelAnchor() {
+    var accept = document.querySelector('[onclick*="YoungPlayerTempAccept"]');
+    return accept ? accept.closest('table') : null;
+  }
+
+  function ensureScoutPanel(candidate) {
+    var panel = dom.getVisibleElementById(document, PANEL_ID);
+    var anchor = findScoutPanelAnchor();
+
+    if (!anchor || !anchor.parentElement) {
+      return null;
+    }
+
+    if (panel && panel.dataset.vjtcMode !== 'scout') {
+      panel.remove();
+      panel = null;
+    }
+
+    if (!panel) {
+      dom.removeHiddenById(document, PANEL_ID);
+
+      panel = document.createElement('div');
+      panel.id = PANEL_ID;
+      panel.className = 'vjtc-panel vjtc-mode-scout';
+      panel.dataset.vjtcMode = 'scout';
+
+      panel.innerHTML = ''
+        + '<h3 class="vjtc-title">Kalkulator treningu juniorow</h3>'
+        + '<p class="vjtc-scout-subtitle" id="vjtc-scout-subtitle"></p>'
+        + '<p class="vjtc-hint">Symulacja rozwoju kandydata przed akceptacja propozycji skauta.</p>'
+        + '<div class="vjtc-grid">'
+        + '<label>Wiek<input id="vjtc-age" type="number" min="14" max="18" step="1" value="16"></label>'
+        + '<label>Dni do konca sezonu<input id="vjtc-days-left" type="number" min="0" step="1" value="45">'
+        + '<span class="vjtc-field-hint" id="vjtc-days-left-hint"></span></label>'
+        + '<label>Pula pkt<input id="vjtc-pool" type="number" min="0" max="' + escapeHtml(sim.CONFIG.poolCap) + '" step="1" value="0">'
+        + '<span class="vjtc-field-hint" id="vjtc-pool-hint"></span></label>'
+        + '<label>Dni sezonu<input id="vjtc-season-days" type="number" min="1" step="1" value="' + escapeHtml(sim.CONFIG.seasonDays) + '"></label>'
+        + '</div>'
+        + '<p class="vjtc-hint">Kolejnosc umiejetnosci = priorytet strategii „Priorytet” (▲▼).</p>'
+        + '<div class="vjtc-skills" id="vjtc-skills"></div>'
+        + '<div class="vjtc-actions">'
+        + '<button type="button" class="vjtc-btn" id="vjtc-add-skill">Dodaj umiejetnosc</button>'
+        + '</div>'
+        + '<div class="vjtc-strategies" id="vjtc-strategies">' + buildStrategyCheckboxes(DEFAULT_STRATEGIES) + '</div>'
+        + '<div class="vjtc-actions">'
+        + '<button type="button" class="vjtc-btn" id="vjtc-calculate">Oblicz</button>'
+        + '</div>'
+        + '<div class="vjtc-results" id="vjtc-results"></div>';
+
+      anchor.parentElement.insertBefore(panel, anchor);
+
+      var skillsRoot = panel.querySelector('#vjtc-skills');
+
+      panel.querySelector('#vjtc-add-skill').addEventListener('click', function () {
+        var code = 'UM_SERWIS';
+        var scoutCandidate = getScoutCandidate(panel);
+        var level = scoutCandidate && scoutCandidate.attributes[code] != null
+          ? scoutCandidate.attributes[code]
+          : 10;
+        skillsRoot.appendChild(createSkillRow(code, level, sim.CONFIG.maxLevel, true));
+      });
+
+      panel.addEventListener('click', function (event) {
+        var skillRow = event.target.closest('.vjtc-skill-row');
+
+        if (event.target.classList.contains('vjtc-remove-skill')) {
+          var rows = skillsRoot.querySelectorAll('.vjtc-skill-row');
+          if (rows.length > 1 && skillRow) {
+            skillRow.remove();
+          }
+          return;
+        }
+
+        if (event.target.classList.contains('vjtc-move-up') && skillRow) {
+          moveSkillRow(skillRow, -1);
+          return;
+        }
+
+        if (event.target.classList.contains('vjtc-move-down') && skillRow) {
+          moveSkillRow(skillRow, 1);
+        }
+      });
+
+      panel.querySelector('#vjtc-calculate').addEventListener('click', function () {
+        renderResults(panel, collectInput(panel));
+      });
+
+      panel.addEventListener('change', function (event) {
+        if (!event.target.classList.contains('vjtc-skill-code')) {
+          return;
+        }
+
+        var row = event.target.closest('.vjtc-skill-row');
+        var scoutCandidate = getScoutCandidate(panel);
+
+        if (row && scoutCandidate) {
+          setRowLevelFromPlayer(row, scoutCandidate);
+        }
+      });
+
+      panel.dataset.vjtcControlsBound = '1';
+    }
+
+    return panel;
+  }
+
+  function enhanceScoutView() {
+    if (!parser.isScoutView(document)) {
+      return;
+    }
+
+    var candidate = parser.parseScoutCandidateFromRoot(document);
+
+    if (!candidate) {
+      return;
+    }
+
+    injectStyles();
+
+    var panel = ensureScoutPanel(candidate);
+
+    if (!panel) {
+      return;
+    }
+
+    var signature = buildScoutSignature(candidate);
+
+    if (panel.dataset.scoutSignature !== signature) {
+      loadScoutCandidateIntoPanel(panel, candidate);
+      panel.dataset.scoutSignature = signature;
+    }
+
+    if (!panel.dataset.poolRequested) {
+      panel.dataset.poolRequested = '1';
+      refreshPoolFromTrainingAjax(panel);
+    }
+
+    if (!panel.dataset.scheduleRequested) {
+      panel.dataset.scheduleRequested = '1';
+      refreshDaysLeftFromSchedule(panel);
+    }
   }
 
   function enhanceJuniorTrainingView() {
@@ -696,7 +1005,14 @@
     }
 
     injectStyles();
-    var panel = dom.getVisibleElementById(document, PANEL_ID) || ensurePanel(form);
+
+    var existingPanel = dom.getVisibleElementById(document, PANEL_ID);
+    if (existingPanel && existingPanel.dataset.vjtcMode === 'scout') {
+      existingPanel.remove();
+      existingPanel = null;
+    }
+
+    var panel = existingPanel || ensurePanel(form);
     refreshPlayerSelect(panel, form);
     refreshPoolFromForm(panel, form);
     ensurePanelControls(panel, form);
@@ -708,7 +1024,14 @@
   }
 
   function scheduleEnhance() {
-    window.setTimeout(enhanceJuniorTrainingView, 80);
+    window.setTimeout(function () {
+      if (parser.isScoutView(document)) {
+        enhanceScoutView();
+        return;
+      }
+
+      enhanceJuniorTrainingView();
+    }, 80);
   }
 
   document.addEventListener('change', function (event) {
