@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Changes List Enhancer
 // @namespace    https://vm-manager.org/
-// @version      0.1.0
+// @version      0.1.1
 // @description  Sorting and filtering for VM Manager tactic changes list view.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -39,6 +39,7 @@
 
   var STYLE_ID = 'vtcl-style';
   var PANEL_ID = 'vtcl-filter-panel';
+  var PANEL_ROW_ID = 'vtcl-filter-panel-row';
   var SIGNATURE_ATTR = 'data-vtcl-signature';
   var SORT_KEY_ATTR = 'data-vtcl-sort-key';
   var SORT_DIR_ATTR = 'data-vtcl-sort-direction';
@@ -123,8 +124,12 @@
     return null;
   }
 
-  function findChangeDataRows(documentRef) {
-    return dom.queryVisibleAll(documentRef, 'span.small_link')
+  function findChangeDataRowsInScope(scope) {
+    if (!scope || !scope.querySelectorAll) {
+      return [];
+    }
+
+    return Array.prototype.slice.call(scope.querySelectorAll('span.small_link'))
       .filter(function (el) {
         return getOnClick(el).indexOf('ChangeEdit&changeId=') !== -1;
       })
@@ -134,10 +139,14 @@
       .filter(Boolean);
   }
 
+  function findChangeDataRows(documentRef, listRoot) {
+    var scope = listRoot && listRoot.listTable ? listRoot.listTable : documentRef;
+
+    return findChangeDataRowsInScope(scope);
+  }
+
   function isChangesListView(documentRef) {
-    return !isChangeAddView(documentRef) &&
-      Boolean(findChangesHeaderRow(documentRef)) &&
-      findChangeDataRows(documentRef).length > 0;
+    return !isChangeAddView(documentRef) && Boolean(findChangesListRoot(documentRef));
   }
 
   function getPlayerLinks(row) {
@@ -275,13 +284,41 @@
     return parseChangeRowsFromHtmlRegex(html);
   }
 
-  function getChangeBlock(row) {
+  function getBlockRowFromInnerRow(row) {
     var innerTable = row.closest('table');
     var tableCell = innerTable ? innerTable.parentNode : null;
     var blockRow = tableCell && tableCell.parentNode ? tableCell.parentNode : null;
-    var spacerRow = blockRow ? blockRow.nextElementSibling : null;
 
     if (!blockRow || blockRow.tagName.toLowerCase() !== 'tr') {
+      return null;
+    }
+
+    return blockRow;
+  }
+
+  function getListTableFromBlockRow(blockRow) {
+    var parent = blockRow ? blockRow.parentNode : null;
+
+    if (!parent) {
+      return null;
+    }
+
+    if (parent.tagName.toLowerCase() === 'tbody') {
+      return parent.parentNode;
+    }
+
+    if (parent.tagName.toLowerCase() === 'table') {
+      return parent;
+    }
+
+    return null;
+  }
+
+  function getChangeBlock(row) {
+    var blockRow = getBlockRowFromInnerRow(row);
+    var spacerRow = blockRow ? blockRow.nextElementSibling : null;
+
+    if (!blockRow) {
       return null;
     }
 
@@ -300,6 +337,60 @@
       blockRow: blockRow,
       spacerRow: null
     };
+  }
+
+  function findChangesListRoot(documentRef) {
+    var headerRow = findChangesHeaderRow(documentRef);
+    var headerBlockRow;
+    var headerListTable;
+    var dataRows;
+    var dataBlockRow;
+    var dataListTable;
+
+    if (!headerRow) {
+      return null;
+    }
+
+    headerBlockRow = getBlockRowFromInnerRow(headerRow);
+    headerListTable = getListTableFromBlockRow(headerBlockRow);
+
+    if (!headerBlockRow || !headerListTable) {
+      return null;
+    }
+
+    dataRows = findChangeDataRowsInScope(headerListTable);
+
+    if (!dataRows.length) {
+      return null;
+    }
+
+    dataBlockRow = getBlockRowFromInnerRow(dataRows[0]);
+    dataListTable = getListTableFromBlockRow(dataBlockRow);
+
+    if (!dataBlockRow || !dataListTable || headerListTable !== dataListTable) {
+      return null;
+    }
+
+    return {
+      headerRow: headerRow,
+      headerBlockRow: headerBlockRow,
+      listTable: headerListTable,
+      dataRows: dataRows
+    };
+  }
+
+  function getFilterPanel(documentRef) {
+    return dom.getVisibleElementById(documentRef, PANEL_ID) || documentRef.getElementById(PANEL_ID);
+  }
+
+  function queryPanelControls(documentRef, selector) {
+    var panel = getFilterPanel(documentRef);
+
+    if (!panel) {
+      return [];
+    }
+
+    return Array.prototype.slice.call(panel.querySelectorAll(selector));
   }
 
   function setBlockVisible(block, visible) {
@@ -352,7 +443,7 @@
   }
 
   function getActiveSetFilters(documentRef) {
-    var selected = dom.queryVisibleAll(documentRef, '.' + SET_FILTER_CLASS + ':checked').map(function (input) {
+    var selected = queryPanelControls(documentRef, '.' + SET_FILTER_CLASS + ':checked').map(function (input) {
       return input.value;
     });
 
@@ -364,15 +455,15 @@
   }
 
   function getSearchQuery(documentRef) {
-    var input = dom.getVisibleElementById(documentRef, SEARCH_INPUT_ID) ||
-      documentRef.getElementById(SEARCH_INPUT_ID);
+    var panel = getFilterPanel(documentRef);
+    var input = panel ? panel.querySelector('#' + dom.cssEscape(SEARCH_INPUT_ID)) : null;
 
     return input ? normalizeText(input.value).toLocaleLowerCase('pl') : '';
   }
 
   function getSelectedPlayerId(documentRef) {
-    var select = dom.getVisibleElementById(documentRef, PLAYER_FILTER_ID) ||
-      documentRef.getElementById(PLAYER_FILTER_ID);
+    var panel = getFilterPanel(documentRef);
+    var select = panel ? panel.querySelector('#' + dom.cssEscape(PLAYER_FILTER_ID)) : null;
 
     return select ? select.value : '';
   }
@@ -404,7 +495,8 @@
   }
 
   function updateCounter(documentRef, visibleCount, totalCount) {
-    var counter = documentRef.querySelector('.' + COUNTER_CLASS);
+    var panel = getFilterPanel(documentRef);
+    var counter = panel ? panel.querySelector('.' + COUNTER_CLASS) : null;
 
     if (!counter) {
       return;
@@ -415,8 +507,9 @@
       : 'Pokazano ' + visibleCount + ' / ' + totalCount;
   }
 
-  function applyFilters(documentRef) {
-    var rows = findChangeDataRows(documentRef);
+  function applyFilters(documentRef, listRoot) {
+    var root = listRoot || findChangesListRoot(documentRef);
+    var rows = root ? root.dataRows : [];
     var parsedRows = rows.map(parseChangeRow);
     var visibleCount = 0;
 
@@ -438,7 +531,8 @@
   }
 
   function sortChangesBy(sortKey, documentRef) {
-    var rows = findChangeDataRows(documentRef);
+    var listRoot = findChangesListRoot(documentRef);
+    var rows = listRoot ? listRoot.dataRows : [];
     var currentKey = documentRef.body.getAttribute(SORT_KEY_ATTR);
     var currentDirection = documentRef.body.getAttribute(SORT_DIR_ATTR) || 'desc';
     var nextDirection = currentKey === sortKey && currentDirection === 'desc' ? 'asc' : 'desc';
@@ -576,25 +670,28 @@
     text.textContent = label;
 
     input.addEventListener('change', function () {
+      var panel = getFilterPanel(documentRef);
+      var setFilters = panel ? panel.querySelectorAll('.' + SET_FILTER_CLASS) : [];
+
       if (value === 'all' && input.checked) {
-        dom.queryVisibleAll(documentRef, '.' + SET_FILTER_CLASS).forEach(function (checkbox) {
+        Array.prototype.forEach.call(setFilters, function (checkbox) {
           if (checkbox.value !== 'all') {
             checkbox.checked = false;
           }
         });
       } else if (value !== 'all' && input.checked) {
-        dom.queryVisibleAll(documentRef, '.' + SET_FILTER_CLASS).forEach(function (checkbox) {
+        Array.prototype.forEach.call(setFilters, function (checkbox) {
           if (checkbox.value === 'all') {
             checkbox.checked = false;
           }
         });
       } else if (value !== 'all') {
-        var anySet = dom.queryVisibleAll(documentRef, '.' + SET_FILTER_CLASS).some(function (checkbox) {
+        var anySet = Array.prototype.some.call(setFilters, function (checkbox) {
           return checkbox.value !== 'all' && checkbox.checked;
         });
 
         if (!anySet) {
-          dom.queryVisibleAll(documentRef, '.' + SET_FILTER_CLASS).forEach(function (checkbox) {
+          Array.prototype.forEach.call(setFilters, function (checkbox) {
             checkbox.checked = checkbox.value === 'all';
           });
         }
@@ -610,8 +707,9 @@
   }
 
   function resetFilters(documentRef) {
-    var search = documentRef.getElementById(SEARCH_INPUT_ID);
-    var player = documentRef.getElementById(PLAYER_FILTER_ID);
+    var panel = getFilterPanel(documentRef);
+    var search = panel ? panel.querySelector('#' + dom.cssEscape(SEARCH_INPUT_ID)) : null;
+    var player = panel ? panel.querySelector('#' + dom.cssEscape(PLAYER_FILTER_ID)) : null;
 
     if (search) {
       search.value = '';
@@ -620,7 +718,7 @@
       player.value = '';
     }
 
-    dom.queryVisibleAll(documentRef, '.' + SET_FILTER_CLASS).forEach(function (checkbox) {
+    queryPanelControls(documentRef, '.' + SET_FILTER_CLASS).forEach(function (checkbox) {
       checkbox.checked = checkbox.value === 'all';
     });
 
@@ -635,10 +733,13 @@
     var style = documentRef.createElement('style');
     style.id = STYLE_ID;
     style.textContent = [
+      '#' + PANEL_ROW_ID + ' td {',
+      '  padding: 0;',
+      '}',
       '#' + PANEL_ID + ' {',
       '  box-sizing: border-box;',
       '  width: 100%;',
-      '  margin: 0 0 6px 0;',
+      '  margin: 0;',
       '  padding: 8px 10px;',
       '  background: #102f43;',
       '  border: 1px solid #2f80b7;',
@@ -801,19 +902,62 @@
     }).join('|');
   }
 
-  function cleanupChangesList(documentRef) {
+  function removeFilterPanel(documentRef) {
+    var panelRow = documentRef.getElementById(PANEL_ROW_ID);
     var panel = documentRef.getElementById(PANEL_ID);
 
-    if (panel) {
+    if (panelRow) {
+      panelRow.remove();
+    } else if (panel) {
       panel.remove();
     }
 
-    findChangeDataRows(documentRef).forEach(function (row) {
-      var block = getChangeBlock(row);
-      if (block) {
-        setBlockVisible(block, true);
+    dom.removeHiddenById(documentRef, PANEL_ID);
+    dom.removeHiddenById(documentRef, PANEL_ROW_ID);
+  }
+
+  function mountFilterPanel(documentRef, listRoot, panel) {
+    var panelRow = documentRef.getElementById(PANEL_ROW_ID);
+    var panelCell;
+
+    if (!panelRow) {
+      panelRow = documentRef.createElement('tr');
+      panelRow.id = PANEL_ROW_ID;
+      panelCell = documentRef.createElement('td');
+      panelCell.colSpan = 26;
+      panelRow.appendChild(panelCell);
+    } else {
+      panelCell = panelRow.querySelector('td');
+      if (!panelCell) {
+        panelCell = documentRef.createElement('td');
+        panelRow.appendChild(panelCell);
       }
-    });
+      panelCell.colSpan = 26;
+      if (panel.parentNode !== panelCell) {
+        panelCell.appendChild(panel);
+      }
+    }
+
+    if (panelRow.parentNode && panelRow.parentNode !== listRoot.listTable) {
+      panelRow.remove();
+    }
+
+    listRoot.listTable.insertBefore(panelRow, listRoot.headerBlockRow);
+  }
+
+  function cleanupChangesList(documentRef) {
+    var listRoot = findChangesListRoot(documentRef);
+
+    removeFilterPanel(documentRef);
+
+    if (listRoot) {
+      listRoot.dataRows.forEach(function (row) {
+        var block = getChangeBlock(row);
+        if (block) {
+          setBlockVisible(block, true);
+        }
+      });
+    }
 
     documentRef.body.removeAttribute(SIGNATURE_ATTR);
     documentRef.body.removeAttribute(SORT_KEY_ATTR);
@@ -821,39 +965,38 @@
   }
 
   function enhanceChangesList(documentRef) {
-    var headerRow = findChangesHeaderRow(documentRef);
-    var rows = findChangeDataRows(documentRef);
-    var parsedRows = rows.map(parseChangeRow);
-    var signature = createSignature(parsedRows);
-    var headerTable;
-    var parent;
+    var listRoot = findChangesListRoot(documentRef);
+    var parsedRows;
+    var signature;
     var panel;
+    var playerSelect;
 
-    if (!headerRow || !parsedRows.length) {
+    if (!listRoot) {
       return;
     }
 
+    parsedRows = listRoot.dataRows.map(parseChangeRow);
+    signature = createSignature(parsedRows);
+    panel = getFilterPanel(documentRef);
+
     injectStyles(documentRef);
 
-    if (documentRef.body.getAttribute(SIGNATURE_ATTR) === signature && documentRef.getElementById(PANEL_ID)) {
-      populatePlayerFilter(documentRef.getElementById(PLAYER_FILTER_ID), parsedRows);
-      applyFilters(documentRef);
+    if (documentRef.body.getAttribute(SIGNATURE_ATTR) === signature && panel) {
+      playerSelect = panel.querySelector('#' + dom.cssEscape(PLAYER_FILTER_ID));
+      if (playerSelect) {
+        populatePlayerFilter(playerSelect, parsedRows);
+      }
+      mountFilterPanel(documentRef, listRoot, panel);
+      applyFilters(documentRef, listRoot);
       return;
     }
 
     cleanupChangesList(documentRef);
     documentRef.body.setAttribute(SIGNATURE_ATTR, signature);
 
-    headerTable = headerRow.closest('table');
-    parent = headerTable ? headerTable.parentNode : null;
-    if (!parent) {
-      return;
-    }
-
     panel = createFilterPanel(documentRef, parsedRows);
-    parent.insertBefore(panel, headerTable);
-
-    applyFilters(documentRef);
+    mountFilterPanel(documentRef, listRoot, panel);
+    applyFilters(documentRef, listRoot);
   }
 
   function start() {
@@ -876,6 +1019,7 @@
     parseChangeRowsFromHtml: parseChangeRowsFromHtml,
     parseChangeRowsFromHtmlRegex: parseChangeRowsFromHtmlRegex,
     findChangeDataRows: findChangeDataRows,
+    findChangesListRoot: findChangesListRoot,
     isChangesListView: isChangesListView,
     isChangeAddView: isChangeAddView,
     rowMatchesFilters: rowMatchesFilters,
