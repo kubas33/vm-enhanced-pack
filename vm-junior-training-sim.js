@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Junior Training Simulator
 // @namespace    https://vm-manager.org/
-// @version      1.0.0
+// @version      1.1.0
 // @description  Pure logic for junior academy training projection in VM Manager.
 // @grant        none
 // @run-at       document-start
@@ -54,22 +54,46 @@
     },
   };
 
-  function sessionsToLevelUp(level, age) {
+  function tierSessionsForIntegerLevel(integerLevel, age) {
     var ageBonus = Math.max(0, age - 16);
+    var base = Math.floor(integerLevel);
 
-    if (level >= 30 - CONFIG.levelEpsilon) {
-      return 7 + ageBonus;
-    }
-    if (level < 5) {
+    if (base < 5) {
       return CONFIG.tierBelow5 + ageBonus;
     }
-    if (level < 15) {
+    if (base < 15) {
       return 5 + ageBonus;
     }
-    if (level < 25) {
+    if (base < 25) {
       return 6 + ageBonus;
     }
     return 7 + ageBonus;
+  }
+
+  function fullSessionsForFinalBand(age) {
+    return 2 + Math.max(0, age - 16);
+  }
+
+  function sessionsToNextMilestone(level, age) {
+    var current = Number(level);
+    var remainingToMax;
+    var remainingFraction;
+
+    if (current >= CONFIG.maxLevel - CONFIG.levelEpsilon) {
+      return 0;
+    }
+
+    if (current >= 30 - CONFIG.levelEpsilon) {
+      remainingToMax = CONFIG.maxLevel - current;
+      return Math.max(1, Math.ceil(fullSessionsForFinalBand(age) * remainingToMax / 0.5));
+    }
+
+    remainingFraction = 1 - (current - Math.floor(current));
+    return Math.max(1, Math.ceil(tierSessionsForIntegerLevel(current, age) * remainingFraction));
+  }
+
+  function sessionsToLevelUp(level, age) {
+    return sessionsToNextMilestone(level, age);
   }
 
   function isBelowTarget(level, targetLevel) {
@@ -139,11 +163,11 @@
     }
 
     while (isBelowTarget(current, target)) {
-      total += sessionsToLevelUp(current, playerAge);
+      total += sessionsToNextMilestone(current, playerAge);
       if (current >= 30 - CONFIG.levelEpsilon) {
         current = CONFIG.maxLevel;
       } else {
-        current += 1;
+        current = Math.floor(current) + 1;
       }
     }
 
@@ -176,7 +200,7 @@
   }
 
   function applyTraining(skill, age) {
-    var needed = sessionsToLevelUp(skill.level, age);
+    var needed = sessionsToNextMilestone(skill.level, age);
 
     skill.progress += 1;
 
@@ -187,7 +211,7 @@
     if (skill.level >= 30 - CONFIG.levelEpsilon) {
       skill.level = CONFIG.maxLevel;
     } else {
-      skill.level += 1;
+      skill.level = Math.floor(skill.level) + 1;
     }
 
     skill.progress = 0;
@@ -388,6 +412,8 @@
     CONFIG: CONFIG,
     STRATEGY_META: STRATEGY_META,
     sessionsToLevelUp: sessionsToLevelUp,
+    sessionsToNextMilestone: sessionsToNextMilestone,
+    fullSessionsForFinalBand: fullSessionsForFinalBand,
     isBelowTarget: isBelowTarget,
     getCareerSeasons: getCareerSeasons,
     getCareerDays: getCareerDays,

@@ -6,7 +6,9 @@ var assert = require('assert');
 var sim = require('../vm-junior-training-sim.js');
 
 assert.strictEqual(sim.trainingsRequiredForSkill(7, 30, 16), 135, '7->30 at age 16 should cost 135 trainings');
-assert.strictEqual(sim.trainingsRequiredForSkill(7, 30.5, 16), 142, '7->30.5 at age 16 should cost 142 trainings');
+assert.strictEqual(sim.trainingsRequiredForSkill(7, 30.5, 16), 137, '7->30.5 at age 16 should cost 137 trainings');
+assert.strictEqual(sim.trainingsRequiredForSkill(30.3, 30.5, 18), 2, '30.3->30.5 at age 18 should need ~2 trainings');
+assert.strictEqual(sim.trainingsRequiredForSkill(29.8, 30.5, 18), 6, '29.8->30.5 at age 18 should need 2+4 trainings');
 
 var soloResult = sim.simulate({
   age: 16,
@@ -19,9 +21,10 @@ var soloResult = sim.simulate({
 
 assert.strictEqual(soloResult.totalLevelUps, 24, '7->30.5 should produce 24 attribute level-ups');
 assert.strictEqual(soloResult.skills[0].levelUps, 24, 'single skill should track its own level-ups');
-assert.strictEqual(soloResult.skills[0].trainingsUsed, 142, '7->30.5 should use 142 trainings on that skill');
+assert.strictEqual(soloResult.skills[0].trainingsUsed, 137, '7->30.5 should use 137 trainings on that skill');
 assert.strictEqual(soloResult.skills[0].reachedTarget, true);
-assert.strictEqual(sim.sessionsToLevelUp(30, 16), 7, '30->30.5 should use 25+ tier at age 16');
+assert.strictEqual(sim.sessionsToLevelUp(30, 16), 2, '30->30.5 full band at age 16');
+assert.strictEqual(sim.sessionsToLevelUp(30.3, 18), 2, '30.3->30.5 proportional at age 18');
 assert.strictEqual(sim.sessionsToLevelUp(14, 16), 5, '14->15 should still use tier below 15');
 assert.strictEqual(sim.sessionsToLevelUp(15, 16), 6, '15->16 should use tier below 25');
 assert.strictEqual(sim.sessionsToLevelUp(25, 17), 8, 'age 17 adds +1 to tier 25+ cost');
