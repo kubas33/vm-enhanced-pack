@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Changes List Enhancer
 // @namespace    https://vm-manager.org/
-// @version      0.1.3
+// @version      0.1.4
 // @description  Sorting and filtering for VM Manager tactic changes list view.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -51,13 +51,15 @@
   var COUNTER_CLASS = 'vtcl-counter';
 
   var DEBUG_STORAGE_KEY = 'vtcl.debug';
+  var enhancing = false;
+  var lastEnhanceKey = '';
 
   function isDebugEnabled() {
     if (!root || !root.localStorage) {
-      return true;
+      return false;
     }
 
-    return root.localStorage.getItem(DEBUG_STORAGE_KEY) !== '0';
+    return root.localStorage.getItem(DEBUG_STORAGE_KEY) === '1';
   }
 
   function debugLog() {
@@ -83,10 +85,10 @@
       return getOnClick(el).indexOf('ChangeEdit&changeId=') !== -1;
     });
     var node;
-    var best = documentRef;
+    var best = null;
 
     if (!visibleEdit) {
-      return documentRef;
+      return null;
     }
 
     node = visibleEdit;
@@ -180,20 +182,20 @@
 
   function collectDebugStatus(documentRef) {
     var scope = getViewScope(documentRef);
-    var headerRow = findChangesHeaderRow(documentRef, scope, false);
-    var scopedRows = findChangeDataRowsInScope(scope);
+    var headerRow = scope ? findChangesHeaderRow(documentRef, scope, false) : null;
+    var scopedRows = scope ? findChangeDataRowsInScope(scope) : [];
     var panel = documentRef.getElementById(PANEL_ID);
 
     return {
       debugEnabled: isDebugEnabled(),
       isChangeAddView: isChangeAddView(documentRef),
-      scope: describeNode(scope),
+      scope: scope ? describeNode(scope) : 'none',
       headerFound: Boolean(headerRow),
       headerVisible: headerRow ? dom.isVisibleElement(headerRow) : false,
       scopedDataRows: scopedRows.length,
-      mountedPanel: Boolean(panel),
+      mountedPanel: Boolean(panel && panel.isConnected),
       mountedPanelVisible: Boolean(dom.getVisibleElementById(documentRef, PANEL_ID)),
-      mountMode: panel ? (documentRef.getElementById(PANEL_ROW_ID) ? 'table-row' : 'div') : 'none'
+      mountMode: panel && panel.isConnected ? 'div' : 'none'
     };
   }
 
@@ -454,44 +456,72 @@
 
   function findChangesListRoot(documentRef) {
     var scope = getViewScope(documentRef);
-    var headerRow = findChangesHeaderRow(documentRef, scope, true);
+    var headerRow;
     var headerBlockRow;
     var dataRows;
     var listTable;
+    var mountTarget;
 
+    if (!scope) {
+      return null;
+    }
+
+    headerRow = findChangesHeaderRow(documentRef, scope, true);
     if (!headerRow) {
       headerRow = findChangesHeaderRow(documentRef, scope, false);
     }
 
     if (!headerRow) {
-      debugLog('findChangesListRoot: brak nagłówka', collectDebugStatus(documentRef));
+      debugLog('findChangesListRoot: brak nagłówka w scope', describeNode(scope));
       return null;
     }
 
-    headerBlockRow = getBlockRowFromInnerRow(headerRow);
-    if (!headerBlockRow) {
-      headerBlockRow = headerRow;
-    }
-
+    headerBlockRow = getBlockRowFromInnerRow(headerRow) || headerRow;
     dataRows = findChangeDataRowsInScope(scope);
-    if (!dataRows.length) {
-      dataRows = findChangeDataRowsInScope(documentRef);
-    }
 
     if (!dataRows.length) {
-      debugLog('findChangesListRoot: brak wierszy ChangeEdit', collectDebugStatus(documentRef));
+      debugLog('findChangesListRoot: brak wierszy ChangeEdit w scope', describeNode(scope));
       return null;
     }
 
     listTable = findListContainer(headerBlockRow, headerRow) || getTableParent(headerBlockRow) || scope;
+    mountTarget = getMountTarget(headerRow, headerBlockRow);
 
     return {
       headerRow: headerRow,
       headerBlockRow: headerBlockRow,
       listTable: listTable,
       dataRows: findChangeDataRowsInScope(listTable).length ? findChangeDataRowsInScope(listTable) : dataRows,
-      scope: scope
+      scope: scope,
+      mountTarget: mountTarget
     };
+  }
+
+  function getMountTarget(headerRow, headerBlockRow) {
+    var headerTable = headerRow.closest('table');
+    var parent = headerTable ? headerTable.parentNode : null;
+
+    if (parent && parent.nodeType === 1) {
+      return {
+        parent: parent,
+        before: headerTable
+      };
+    }
+
+    return {
+      parent: headerBlockRow.parentNode,
+      before: headerBlockRow
+    };
+  }
+
+  function isPanelMounted(documentRef, listRoot) {
+    var panel = documentRef.getElementById(PANEL_ID);
+
+    if (!panel || !panel.isConnected || !listRoot || !listRoot.mountTarget) {
+      return false;
+    }
+
+    return listRoot.mountTarget.parent.contains(panel);
   }
 
   function getFilterPanel(documentRef) {
@@ -1032,59 +1062,43 @@
   }
 
   function mountFilterPanel(documentRef, listRoot, panel) {
+    var mountTarget = listRoot.mountTarget;
     var panelRow = documentRef.getElementById(PANEL_ROW_ID);
-    var panelCell;
-    var mountParent = listRoot.headerBlockRow.parentNode;
-    var headerTable = listRoot.headerRow.closest('table');
-    var fallbackParent = headerTable ? headerTable.parentNode : null;
 
-    if (mountParent && mountParent.tagName &&
-      (mountParent.tagName.toLowerCase() === 'tbody' || mountParent.tagName.toLowerCase() === 'table')) {
-      if (!panelRow) {
-        panelRow = documentRef.createElement('tr');
-        panelRow.id = PANEL_ROW_ID;
-        panelCell = documentRef.createElement('td');
-        panelCell.colSpan = 26;
-        panelRow.appendChild(panelCell);
-      } else {
-        panelCell = panelRow.querySelector('td');
-        if (!panelCell) {
-          panelCell = documentRef.createElement('td');
-          panelRow.appendChild(panelCell);
-        }
-        panelCell.colSpan = 26;
-        if (panel.parentNode !== panelCell) {
-          panelCell.appendChild(panel);
-        }
-      }
-
-      if (panelRow.parentNode && panelRow.parentNode !== mountParent) {
-        panelRow.remove();
-      }
-
-      mountParent.insertBefore(panelRow, listRoot.headerBlockRow);
-      debugLog('mountFilterPanel: table-row', describeNode(mountParent));
-      return;
+    if (!panel || !mountTarget || !mountTarget.parent) {
+      debugLog('mountFilterPanel: brak mountTarget');
+      return false;
     }
 
-    if (fallbackParent) {
-      if (panelRow) {
-        panelRow.remove();
-      }
-
-      if (panel.parentNode !== fallbackParent) {
-        fallbackParent.insertBefore(panel, headerTable);
-      }
-
-      debugLog('mountFilterPanel: div fallback', describeNode(fallbackParent));
-      return;
+    if (!panel.id) {
+      panel.id = PANEL_ID;
     }
 
-    debugLog('mountFilterPanel: nie udało się zamontować panelu', collectDebugStatus(documentRef));
+    if (panelRow) {
+      panelRow.remove();
+    }
+
+    if (panel.parentNode && panel.parentNode !== mountTarget.parent) {
+      panel.remove();
+    }
+
+    mountTarget.parent.insertBefore(panel, mountTarget.before);
+    debugLog('mountFilterPanel: div', describeNode(mountTarget.parent));
+    return documentRef.getElementById(PANEL_ID) === panel && panel.isConnected;
   }
 
-  function cleanupChangesList(documentRef) {
+  function hasVisibleChangesList(documentRef) {
+    return dom.queryVisibleAll(documentRef, 'span.small_link').some(function (el) {
+      return getOnClick(el).indexOf('ChangeEdit&changeId=') !== -1;
+    });
+  }
+
+  function cleanupChangesList(documentRef, force) {
     var listRoot = findChangesListRoot(documentRef);
+
+    if (!force && hasVisibleChangesList(documentRef)) {
+      return;
+    }
 
     removeFilterPanel(documentRef);
 
@@ -1100,44 +1114,73 @@
     documentRef.body.removeAttribute(SIGNATURE_ATTR);
     documentRef.body.removeAttribute(SORT_KEY_ATTR);
     documentRef.body.removeAttribute(SORT_DIR_ATTR);
+    lastEnhanceKey = '';
   }
 
   function enhanceChangesList(documentRef) {
-    var listRoot = findChangesListRoot(documentRef);
+    var listRoot;
     var parsedRows;
     var signature;
     var panel;
     var playerSelect;
+    var enhanceKey;
+    var mounted;
 
+    if (enhancing) {
+      return;
+    }
+
+    listRoot = findChangesListRoot(documentRef);
     if (!listRoot) {
-      debugLog('enhanceChangesList: pominięto', collectDebugStatus(documentRef));
       return;
     }
 
     parsedRows = listRoot.dataRows.map(parseChangeRow);
     signature = createSignature(parsedRows);
-    panel = getFilterPanel(documentRef);
+    enhanceKey = signature + '@' + describeNode(listRoot.scope);
+    panel = documentRef.getElementById(PANEL_ID);
 
-    injectStyles(documentRef);
-
-    if (documentRef.body.getAttribute(SIGNATURE_ATTR) === signature && panel) {
-      playerSelect = panel.querySelector('#' + dom.cssEscape(PLAYER_FILTER_ID));
-      if (playerSelect) {
-        populatePlayerFilter(playerSelect, parsedRows);
-      }
-      mountFilterPanel(documentRef, listRoot, panel);
+    if (enhanceKey === lastEnhanceKey && isPanelMounted(documentRef, listRoot)) {
       applyFilters(documentRef, listRoot);
-      debugLog('enhanceChangesList: odświeżono istniejący panel', collectDebugStatus(documentRef));
       return;
     }
 
-    cleanupChangesList(documentRef);
-    documentRef.body.setAttribute(SIGNATURE_ATTR, signature);
+    enhancing = true;
 
-    panel = createFilterPanel(documentRef, parsedRows);
-    mountFilterPanel(documentRef, listRoot, panel);
-    applyFilters(documentRef, listRoot);
-    debugLog('enhanceChangesList: utworzono panel', collectDebugStatus(documentRef));
+    try {
+      injectStyles(documentRef);
+
+      if (documentRef.body.getAttribute(SIGNATURE_ATTR) !== signature) {
+        removeFilterPanel(documentRef);
+        documentRef.body.removeAttribute(SIGNATURE_ATTR);
+      }
+
+      if (!panel || !panel.isConnected) {
+        panel = createFilterPanel(documentRef, parsedRows);
+      } else {
+        playerSelect = panel.querySelector('#' + dom.cssEscape(PLAYER_FILTER_ID));
+        if (playerSelect) {
+          populatePlayerFilter(playerSelect, parsedRows);
+        }
+      }
+
+      mounted = mountFilterPanel(documentRef, listRoot, panel);
+      if (!mounted) {
+        debugLog('enhanceChangesList: mount failed', collectDebugStatus(documentRef));
+        return;
+      }
+
+      documentRef.body.setAttribute(SIGNATURE_ATTR, signature);
+      lastEnhanceKey = enhanceKey;
+      applyFilters(documentRef, listRoot);
+      debugLog('enhanceChangesList: ok', {
+        rows: parsedRows.length,
+        scope: describeNode(listRoot.scope),
+        mounted: isPanelMounted(documentRef, listRoot)
+      });
+    } finally {
+      enhancing = false;
+    }
   }
 
   function debugStatus(documentRef) {
@@ -1154,7 +1197,7 @@
       return;
     }
 
-    debugLog('start: VM Changes List Enhancer v0.1.3');
+    debugLog('start: VM Changes List Enhancer v0.1.4');
 
     if (root) {
       root.VMChangesListEnhancer = api;
@@ -1165,10 +1208,9 @@
       isActive: isChangesListView,
       onEnhance: enhanceChangesList,
       onDeactivate: function (documentRef) {
-        debugLog('deactivate', collectDebugStatus(documentRef));
-        cleanupChangesList(documentRef);
+        cleanupChangesList(documentRef, false);
       },
-      delayMs: 120
+      delayMs: 200
     }).start();
   }
 
