@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Changes List Enhancer
 // @namespace    https://vm-manager.org/
-// @version      0.1.2
+// @version      0.1.3
 // @description  Sorting and filtering for VM Manager tactic changes list view.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -50,12 +50,56 @@
   var SEARCH_INPUT_ID = 'vtcl-search-input';
   var COUNTER_CLASS = 'vtcl-counter';
 
-  var SORT_KEYS = {
-    playerOut: 'playerOut',
-    playerIn: 'playerIn',
-    activeSetCount: 'activeSetCount',
-    activeSets: 'activeSets'
-  };
+  var DEBUG_STORAGE_KEY = 'vtcl.debug';
+
+  function isDebugEnabled() {
+    if (!root || !root.localStorage) {
+      return true;
+    }
+
+    return root.localStorage.getItem(DEBUG_STORAGE_KEY) !== '0';
+  }
+
+  function debugLog() {
+    if (!isDebugEnabled() || !root || !root.console) {
+      return;
+    }
+
+    root.console.log.apply(root.console, ['[vtcl]'].concat(Array.prototype.slice.call(arguments)));
+  }
+
+  function describeNode(node) {
+    if (!node || !node.tagName) {
+      return String(node);
+    }
+
+    return node.tagName.toLowerCase() +
+      (node.id ? '#' + node.id : '') +
+      (node.className ? '.' + String(node.className).trim().replace(/\s+/g, '.') : '');
+  }
+
+  function getViewScope(documentRef) {
+    var visibleEdit = dom.queryVisibleAll(documentRef, 'span.small_link').find(function (el) {
+      return getOnClick(el).indexOf('ChangeEdit&changeId=') !== -1;
+    });
+    var node;
+    var best = documentRef;
+
+    if (!visibleEdit) {
+      return documentRef;
+    }
+
+    node = visibleEdit;
+    while (node && node !== documentRef && node.nodeType === 1) {
+      if (findChangeDataRowsInScope(node).length &&
+        findChangesHeaderRow(documentRef, node, false)) {
+        best = node;
+      }
+      node = node.parentNode;
+    }
+
+    return best;
+  }
 
   function normalizeText(value) {
     return String(value || '').replace(/\s+/g, ' ').trim();
@@ -90,6 +134,13 @@
     }
   }
 
+  var SORT_KEYS = {
+    playerOut: 'playerOut',
+    playerIn: 'playerIn',
+    activeSetCount: 'activeSetCount',
+    activeSets: 'activeSets'
+  };
+
   function isChangeAddView(documentRef) {
     var saveVisible = dom.queryVisibleAll(documentRef, 'span.link').some(function (el) {
       return getOnClick(el).indexOf('PlayersChangeAdd') !== -1;
@@ -98,8 +149,9 @@
     return saveVisible && Boolean(dom.getVisibleElementById(documentRef, 'player_out'));
   }
 
-  function findChangesHeaderRow(documentRef) {
-    var rows = Array.prototype.slice.call(documentRef.querySelectorAll('tr'));
+  function findChangesHeaderRow(documentRef, scope, requireVisible) {
+    var rootScope = scope && scope.querySelectorAll ? scope : documentRef;
+    var rows = Array.prototype.slice.call(rootScope.querySelectorAll('tr'));
     var i;
     var row;
     var text;
@@ -107,7 +159,7 @@
     for (i = 0; i < rows.length; i += 1) {
       row = rows[i];
 
-      if (!dom.isVisibleElement(row)) {
+      if (requireVisible !== false && !dom.isVisibleElement(row)) {
         continue;
       }
 
@@ -116,12 +168,33 @@
         continue;
       }
 
-      if (row.querySelector('img[src*="menu_mr"]') || row.querySelector('img[title*="Wynik meczu"]')) {
+      if (row.querySelector('img[src*="menu_mr"]') ||
+        row.querySelector('img[title*="Wynik meczu"]') ||
+        row.querySelector('img[alt*="Wynik meczu"]')) {
         return row;
       }
     }
 
     return null;
+  }
+
+  function collectDebugStatus(documentRef) {
+    var scope = getViewScope(documentRef);
+    var headerRow = findChangesHeaderRow(documentRef, scope, false);
+    var scopedRows = findChangeDataRowsInScope(scope);
+    var panel = documentRef.getElementById(PANEL_ID);
+
+    return {
+      debugEnabled: isDebugEnabled(),
+      isChangeAddView: isChangeAddView(documentRef),
+      scope: describeNode(scope),
+      headerFound: Boolean(headerRow),
+      headerVisible: headerRow ? dom.isVisibleElement(headerRow) : false,
+      scopedDataRows: scopedRows.length,
+      mountedPanel: Boolean(panel),
+      mountedPanelVisible: Boolean(dom.getVisibleElementById(documentRef, PANEL_ID)),
+      mountMode: panel ? (documentRef.getElementById(PANEL_ROW_ID) ? 'table-row' : 'div') : 'none'
+    };
   }
 
   function findChangeDataRowsInScope(scope) {
@@ -328,8 +401,7 @@
     while (node && node.tagName && node.tagName.toLowerCase() !== 'body') {
       if (node.tagName.toLowerCase() === 'tr') {
         listTable = getTableParent(node);
-        if (listTable &&
-          listTable.querySelector('span.small_link[onclick*="ChangeEdit"], span.small_link[OnClick*="ChangeEdit"]')) {
+        if (listTable && findChangeDataRowsInScope(listTable).length) {
           return node;
         }
       }
@@ -381,54 +453,44 @@
   }
 
   function findChangesListRoot(documentRef) {
-    var headerRow = findChangesHeaderRow(documentRef);
+    var scope = getViewScope(documentRef);
+    var headerRow = findChangesHeaderRow(documentRef, scope, true);
     var headerBlockRow;
-    var listTable;
     var dataRows;
-    var dataBlockRow;
+    var listTable;
 
     if (!headerRow) {
+      headerRow = findChangesHeaderRow(documentRef, scope, false);
+    }
+
+    if (!headerRow) {
+      debugLog('findChangesListRoot: brak nagłówka', collectDebugStatus(documentRef));
       return null;
     }
 
     headerBlockRow = getBlockRowFromInnerRow(headerRow);
     if (!headerBlockRow) {
-      return null;
+      headerBlockRow = headerRow;
     }
 
-    listTable = findListContainer(headerBlockRow, headerRow);
-    dataRows = listTable ? findChangeDataRowsInScope(listTable) : [];
-
+    dataRows = findChangeDataRowsInScope(scope);
     if (!dataRows.length) {
-      dataRows = findChangeDataRowsInScope(documentRef).filter(function (row) {
-        var blockRow = getBlockRowFromInnerRow(row);
-        return blockRow && (headerRow.compareDocumentPosition(blockRow) & 4);
-      });
+      dataRows = findChangeDataRowsInScope(documentRef);
     }
 
     if (!dataRows.length) {
+      debugLog('findChangesListRoot: brak wierszy ChangeEdit', collectDebugStatus(documentRef));
       return null;
     }
 
-    if (!listTable) {
-      dataBlockRow = getBlockRowFromInnerRow(dataRows[0]);
-      listTable = dataBlockRow ? findListContainer(dataBlockRow, headerRow) : null;
-    }
-
-    if (!listTable) {
-      return null;
-    }
-
-    dataRows = findChangeDataRowsInScope(listTable);
-    if (!dataRows.length) {
-      return null;
-    }
+    listTable = findListContainer(headerBlockRow, headerRow) || getTableParent(headerBlockRow) || scope;
 
     return {
       headerRow: headerRow,
       headerBlockRow: headerBlockRow,
       listTable: listTable,
-      dataRows: dataRows
+      dataRows: findChangeDataRowsInScope(listTable).length ? findChangeDataRowsInScope(listTable) : dataRows,
+      scope: scope
     };
   }
 
@@ -973,34 +1035,52 @@
     var panelRow = documentRef.getElementById(PANEL_ROW_ID);
     var panelCell;
     var mountParent = listRoot.headerBlockRow.parentNode;
+    var headerTable = listRoot.headerRow.closest('table');
+    var fallbackParent = headerTable ? headerTable.parentNode : null;
 
-    if (!mountParent) {
+    if (mountParent && mountParent.tagName &&
+      (mountParent.tagName.toLowerCase() === 'tbody' || mountParent.tagName.toLowerCase() === 'table')) {
+      if (!panelRow) {
+        panelRow = documentRef.createElement('tr');
+        panelRow.id = PANEL_ROW_ID;
+        panelCell = documentRef.createElement('td');
+        panelCell.colSpan = 26;
+        panelRow.appendChild(panelCell);
+      } else {
+        panelCell = panelRow.querySelector('td');
+        if (!panelCell) {
+          panelCell = documentRef.createElement('td');
+          panelRow.appendChild(panelCell);
+        }
+        panelCell.colSpan = 26;
+        if (panel.parentNode !== panelCell) {
+          panelCell.appendChild(panel);
+        }
+      }
+
+      if (panelRow.parentNode && panelRow.parentNode !== mountParent) {
+        panelRow.remove();
+      }
+
+      mountParent.insertBefore(panelRow, listRoot.headerBlockRow);
+      debugLog('mountFilterPanel: table-row', describeNode(mountParent));
       return;
     }
 
-    if (!panelRow) {
-      panelRow = documentRef.createElement('tr');
-      panelRow.id = PANEL_ROW_ID;
-      panelCell = documentRef.createElement('td');
-      panelCell.colSpan = 26;
-      panelRow.appendChild(panelCell);
-    } else {
-      panelCell = panelRow.querySelector('td');
-      if (!panelCell) {
-        panelCell = documentRef.createElement('td');
-        panelRow.appendChild(panelCell);
+    if (fallbackParent) {
+      if (panelRow) {
+        panelRow.remove();
       }
-      panelCell.colSpan = 26;
-      if (panel.parentNode !== panelCell) {
-        panelCell.appendChild(panel);
+
+      if (panel.parentNode !== fallbackParent) {
+        fallbackParent.insertBefore(panel, headerTable);
       }
+
+      debugLog('mountFilterPanel: div fallback', describeNode(fallbackParent));
+      return;
     }
 
-    if (panelRow.parentNode && panelRow.parentNode !== mountParent) {
-      panelRow.remove();
-    }
-
-    mountParent.insertBefore(panelRow, listRoot.headerBlockRow);
+    debugLog('mountFilterPanel: nie udało się zamontować panelu', collectDebugStatus(documentRef));
   }
 
   function cleanupChangesList(documentRef) {
@@ -1030,6 +1110,7 @@
     var playerSelect;
 
     if (!listRoot) {
+      debugLog('enhanceChangesList: pominięto', collectDebugStatus(documentRef));
       return;
     }
 
@@ -1046,6 +1127,7 @@
       }
       mountFilterPanel(documentRef, listRoot, panel);
       applyFilters(documentRef, listRoot);
+      debugLog('enhanceChangesList: odświeżono istniejący panel', collectDebugStatus(documentRef));
       return;
     }
 
@@ -1055,6 +1137,16 @@
     panel = createFilterPanel(documentRef, parsedRows);
     mountFilterPanel(documentRef, listRoot, panel);
     applyFilters(documentRef, listRoot);
+    debugLog('enhanceChangesList: utworzono panel', collectDebugStatus(documentRef));
+  }
+
+  function debugStatus(documentRef) {
+    var doc = documentRef || (root && root.document);
+    var status = collectDebugStatus(doc);
+    status.isChangesListView = Boolean(findChangesListRoot(doc));
+    status.listRootFound = status.isChangesListView;
+    debugLog('debugStatus', status);
+    return status;
   }
 
   function start() {
@@ -1062,16 +1154,25 @@
       return;
     }
 
+    debugLog('start: VM Changes List Enhancer v0.1.3');
+
+    if (root) {
+      root.VMChangesListEnhancer = api;
+    }
+
     dom.createViewScheduler({
       document: root.document,
       isActive: isChangesListView,
       onEnhance: enhanceChangesList,
-      onDeactivate: cleanupChangesList,
+      onDeactivate: function (documentRef) {
+        debugLog('deactivate', collectDebugStatus(documentRef));
+        cleanupChangesList(documentRef);
+      },
       delayMs: 120
     }).start();
   }
 
-  return {
+  var api = {
     extractVmBody: extractVmBody,
     parseChangeRow: parseChangeRow,
     parseChangeRowsFromHtml: parseChangeRowsFromHtml,
@@ -1082,6 +1183,9 @@
     isChangeAddView: isChangeAddView,
     rowMatchesFilters: rowMatchesFilters,
     getSortValue: getSortValue,
+    debugStatus: debugStatus,
     start: start
   };
+
+  return api;
 }));
