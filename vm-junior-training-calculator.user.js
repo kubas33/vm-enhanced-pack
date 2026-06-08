@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Volleyball junior training calculator
 // @namespace    https://vm-manager.org/
-// @version      0.4.0
+// @version      0.4.1
 // @description  Projects junior academy skill growth with comparable allocation strategies.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -34,7 +34,6 @@
   var SCHEDULE_CACHE_TTL_MS = 5 * 60 * 1000;
   var POOL_CACHE_KEY = 'vjtc.juniorTrainingPool.v1';
   var POOL_CACHE_TTL_MS = 5 * 60 * 1000;
-  var TRAINING_URL = '/Ajax_handler.php?phpsite=view_body.php&action=Training';
   var schedulePromise = null;
   var trainingPoolPromise = null;
 
@@ -135,6 +134,24 @@
 
   function getJuniorTrainingForm() {
     return dom.getVisibleElementById(document, FORM_ID);
+  }
+
+  function getJuniorTrainingFormAnywhere() {
+    var nodes = dom.getElementsById(document, FORM_ID);
+    var i;
+
+    for (i = 0; i < nodes.length; i += 1) {
+      if (parseTrainingPoolFromForm(nodes[i])) {
+        return nodes[i];
+      }
+    }
+
+    return nodes[0] || null;
+  }
+
+  function readJuniorTrainingPoolFromDom() {
+    var form = getJuniorTrainingFormAnywhere();
+    return form ? parseTrainingPoolFromForm(form) : null;
   }
 
   function buildSkillOptions(selectedCode) {
@@ -436,18 +453,14 @@
     }
   }
 
-  function fetchJuniorTrainingPool() {
-    var cached = readPoolCache();
+  function fetchJuniorTrainingPoolFromAction(action) {
+    var url = parser.buildTrainingAjaxUrl(action);
 
-    if (cached) {
-      return Promise.resolve(cached);
+    if (!url) {
+      return Promise.resolve(null);
     }
 
-    if (trainingPoolPromise) {
-      return trainingPoolPromise;
-    }
-
-    trainingPoolPromise = window.fetch(TRAINING_URL)
+    return window.fetch(url)
       .then(function (response) {
         if (!response.ok) {
           throw new Error('Training fetch failed with status ' + response.status);
@@ -456,20 +469,103 @@
       })
       .then(function (text) {
         var html = parser.parseAjaxVmBody(text);
-        var poolData = parser.parseJuniorTrainingPoolFromHtml(html, sim.CONFIG.poolCap);
+        return parser.parseJuniorTrainingPoolFromHtml(html, sim.CONFIG.poolCap);
+      });
+  }
 
-        if (!poolData) {
-          throw new Error('Junior training pool not found in Training response');
+  function fetchJuniorTrainingPoolFromAjax() {
+    var actions = parser.discoverJuniorTrainingActionsFromHtml(document.documentElement.innerHTML);
+    var index = 0;
+
+    function tryNext() {
+      if (index >= actions.length) {
+        return Promise.resolve(null);
+      }
+
+      var action = actions[index];
+      index += 1;
+
+      return fetchJuniorTrainingPoolFromAction(action).then(function (poolData) {
+        if (poolData) {
+          poolData._vjtcAction = action;
+          return poolData;
         }
 
-        writePoolCache(poolData);
-        return poolData;
+        return tryNext();
+      });
+    }
+
+    return tryNext();
+  }
+
+  function resolveJuniorTrainingPool() {
+    var domPool = readJuniorTrainingPoolFromDom();
+
+    if (domPool) {
+      writePoolCache(domPool);
+      return Promise.resolve({
+        pool: domPool,
+        source: 'dom',
+      });
+    }
+
+    var cached = readPoolCache();
+
+    if (cached) {
+      return Promise.resolve({
+        pool: cached,
+        source: 'cache',
+      });
+    }
+
+    if (trainingPoolPromise) {
+      return trainingPoolPromise;
+    }
+
+    trainingPoolPromise = fetchJuniorTrainingPoolFromAjax()
+      .then(function (poolData) {
+        if (!poolData) {
+          throw new Error('Junior training pool not found');
+        }
+
+        writePoolCache({
+          current: poolData.current,
+          max: poolData.max,
+        });
+        return {
+          pool: {
+            current: poolData.current,
+            max: poolData.max,
+          },
+          source: 'ajax',
+          action: poolData._vjtcAction || '',
+        };
       })
       .finally(function () {
         trainingPoolPromise = null;
       });
 
     return trainingPoolPromise;
+  }
+
+  function buildPoolHint(result) {
+    if (!result || !result.pool) {
+      return '';
+    }
+
+    if (result.source === 'dom') {
+      return 'Z formularza treningu juniorow: ' + result.pool.current + '/' + result.pool.max;
+    }
+
+    if (result.source === 'cache') {
+      return 'Z ostatniej wizyty w treningu juniorow: ' + result.pool.current + '/' + result.pool.max;
+    }
+
+    if (result.action) {
+      return 'Aut. (' + result.action + '): ' + result.pool.current + '/' + result.pool.max;
+    }
+
+    return 'Aut. z treningu juniorow: ' + result.pool.current + '/' + result.pool.max;
   }
 
   function applyPoolDataToPanel(panel, poolData, hintText) {
@@ -495,18 +591,15 @@
       hint.textContent = 'Pobieram pule juniorow...';
     }
 
-    return fetchJuniorTrainingPool()
-      .then(function (poolData) {
-        applyPoolDataToPanel(
-          panel,
-          poolData,
-          'Aut. z treningu juniorow: ' + poolData.current + '/' + poolData.max
-        );
-        return poolData;
+    return resolveJuniorTrainingPool()
+      .then(function (result) {
+        applyPoolDataToPanel(panel, result.pool, buildPoolHint(result));
+        return result.pool;
       })
       .catch(function () {
         if (hint) {
-          hint.textContent = 'Nie udalo sie pobrac puli juniorow — ustaw recznie (max ' + sim.CONFIG.poolCap + ').';
+          hint.textContent = 'Nie udalo sie pobrac puli juniorow — wejdz raz w trening juniorow lub ustaw recznie (max '
+            + sim.CONFIG.poolCap + ').';
         }
         return null;
       });
@@ -805,6 +898,7 @@
       return;
     }
 
+    writePoolCache(poolData);
     applyPoolDataToPanel(
       panel,
       poolData,

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Junior Training Parser
 // @namespace    https://vm-manager.org/
-// @version      1.1.0
+// @version      1.1.1
 // @description  Parses junior player data from VM Manager training view HTML/DOM.
 // @grant        none
 // @run-at       document-start
@@ -27,6 +27,11 @@
   var MAX_JUNIOR_LEVEL = 30.5;
   var DEFAULT_JUNIOR_POOL_CAP = 40;
   var SCOUT_ACCEPT_MARKER = 'YoungPlayerTempAccept';
+  var DEFAULT_JUNIOR_TRAINING_ACTIONS = [
+    'YoungTrening',
+    'YoungTraining',
+    'Young_trening',
+  ];
 
   var SCOUT_SKILL_LABEL_TO_CODE = {
     'serwis': 'UM_SERWIS',
@@ -235,6 +240,7 @@
     var markers = [
       "id='" + JUNIOR_FORM_ID + "'",
       'id="' + JUNIOR_FORM_ID + '"',
+      'id=' + JUNIOR_FORM_ID,
     ];
     var start = -1;
     var i;
@@ -251,7 +257,7 @@
     }
 
     var section = source.slice(start);
-    var closeForm = section.indexOf('</FORM>');
+    var closeForm = section.search(/<\/FORM>/i);
 
     if (closeForm >= 0) {
       return section.slice(0, closeForm);
@@ -260,16 +266,7 @@
     return section.slice(0, 15000);
   }
 
-  function parseJuniorTrainingPoolFromHtml(html, poolCap) {
-    var cap = poolCap == null ? DEFAULT_JUNIOR_POOL_CAP : poolCap;
-    var section = extractJuniorTrainingSection(html);
-
-    if (!section) {
-      return null;
-    }
-
-    var match = section.match(/Punkty treningowe:\s*(\d+)\s*\/\s*(\d+)/i);
-
+  function parsePoolMatch(match, poolCap, requireCapMax) {
     if (!match) {
       return null;
     }
@@ -281,10 +278,107 @@
       return null;
     }
 
+    if (requireCapMax && max !== poolCap) {
+      return null;
+    }
+
     return {
       current: current,
-      max: Math.min(max, cap),
+      max: Math.min(max, poolCap),
     };
+  }
+
+  function parseJuniorPoolLinesFromHtml(html, poolCap) {
+    var cap = poolCap == null ? DEFAULT_JUNIOR_POOL_CAP : poolCap;
+    var source = String(html || '');
+    var regex = /Punkty treningowe:\s*(\d+)\s*\/\s*(\d+)/gi;
+    var match;
+
+    while ((match = regex.exec(source)) !== null) {
+      var parsed = parsePoolMatch(match, cap, true);
+
+      if (parsed) {
+        return parsed;
+      }
+    }
+
+    return null;
+  }
+
+  function parseJuniorTrainingPoolFromHtml(html, poolCap) {
+    var cap = poolCap == null ? DEFAULT_JUNIOR_POOL_CAP : poolCap;
+    var section = extractJuniorTrainingSection(html);
+
+    if (section) {
+      var sectionPool = parsePoolMatch(
+        section.match(/Punkty treningowe:\s*(\d+)\s*\/\s*(\d+)/i),
+        cap
+      );
+
+      if (sectionPool) {
+        return sectionPool;
+      }
+    }
+
+    return parseJuniorPoolLinesFromHtml(html, cap);
+  }
+
+  function discoverJuniorTrainingActionsFromHtml(html) {
+    var source = String(html || '');
+    var actions = [];
+    var regex = /callGetViewPanel(?:MenuAnd)?Body(?:Big_1)?\(\s*'([^']+)'\s*(?:,\s*'([^']+)')?\s*\)/gi;
+    var match;
+    var i;
+    var parts;
+
+    function addAction(action) {
+      if (!action || actions.indexOf(action) >= 0) {
+        return;
+      }
+
+      if (/young|mlod|młod|junior|trening/i.test(action)) {
+        actions.push(action);
+      }
+    }
+
+    while ((match = regex.exec(source)) !== null) {
+      parts = [match[1], match[2]];
+
+      for (i = 0; i < parts.length; i += 1) {
+        addAction(parts[i]);
+      }
+    }
+
+    DEFAULT_JUNIOR_TRAINING_ACTIONS.forEach(function (action) {
+      addAction(action);
+    });
+
+    return actions;
+  }
+
+  function buildTrainingAjaxUrl(action) {
+    var actionValue = String(action || '').trim();
+    var segments;
+    var params;
+    var j;
+    var pair;
+
+    if (!actionValue) {
+      return '';
+    }
+
+    segments = actionValue.split('&');
+    params = ['phpsite=view_body.php', 'action=' + encodeURIComponent(segments[0])];
+
+    for (j = 1; j < segments.length; j += 1) {
+      pair = segments[j].split('=');
+
+      if (pair.length >= 2) {
+        params.push(encodeURIComponent(pair[0]) + '=' + encodeURIComponent(pair.slice(1).join('=')));
+      }
+    }
+
+    return '/Ajax_handler.php?' + params.join('&');
   }
 
   function findScoutCandidateContainer(root) {
@@ -427,7 +521,10 @@
     parseNumber: parseNumber,
     parseAjaxVmBody: parseAjaxVmBody,
     parseAttributesFromHtml: parseAttributesFromHtml,
+    DEFAULT_JUNIOR_TRAINING_ACTIONS: DEFAULT_JUNIOR_TRAINING_ACTIONS,
     parseJuniorTrainingPoolFromHtml: parseJuniorTrainingPoolFromHtml,
+    discoverJuniorTrainingActionsFromHtml: discoverJuniorTrainingActionsFromHtml,
+    buildTrainingAjaxUrl: buildTrainingAjaxUrl,
     parsePlayerFromRow: parsePlayerFromRow,
     parseJuniorPlayersFromForm: parseJuniorPlayersFromForm,
     parseScoutCandidateFromHtml: parseScoutCandidateFromHtml,

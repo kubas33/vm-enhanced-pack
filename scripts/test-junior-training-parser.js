@@ -44,4 +44,19 @@ var juniorPool = parser.parseJuniorTrainingPoolFromHtml(poolHtml, 40);
 
 assert.deepStrictEqual(juniorPool, { current: 12, max: 40 }, 'junior pool should come from young_trening_options only');
 
+var seniorOnlyHtml = "<FORM id='trening_options'>Punkty treningowe: 33/60</FORM>";
+assert.strictEqual(parser.parseJuniorTrainingPoolFromHtml(seniorOnlyHtml, 40), null, 'senior 33/60 must not be used as junior pool');
+
+var poolByCap = parser.parseJuniorTrainingPoolFromHtml('Punkty treningowe: 18/40 i cos dalej', 40);
+assert.deepStrictEqual(poolByCap, { current: 18, max: 40 }, 'pool line with /40 should be detected without form id');
+
+var actions = parser.discoverJuniorTrainingActionsFromHtml("callGetViewPanelBody('YoungTrening');");
+assert.ok(actions.indexOf('YoungTrening') >= 0, 'expected YoungTrening action discovery');
+
+assert.strictEqual(
+  parser.buildTrainingAjaxUrl('YoungTrening'),
+  '/Ajax_handler.php?phpsite=view_body.php&action=YoungTrening',
+  'expected junior training ajax url'
+);
+
 console.log('vm-junior-training-parser: all tests passed');
