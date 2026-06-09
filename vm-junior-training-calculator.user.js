@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Volleyball junior training calculator
 // @namespace    https://vm-manager.org/
-// @version      0.5.6
+// @version      0.5.7
 // @description  Projects junior academy skill growth with comparable allocation strategies.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -24,7 +24,7 @@
   var sim = window.VMJuniorTrainingSim;
   var parser = window.VMJuniorTrainingParser;
   var schedule = window.VMMatchesSchedule;
-  var CALCULATOR_VERSION = '0.5.6';
+  var CALCULATOR_VERSION = '0.5.7';
   var SKILLS_HINT_EMPTY = 'Nie udało się ustalić rekomendowanych umiejętności — użyj «Wczytaj wszystkie»';
 
   if (!dom || !positionRules || !sim || !parser || !schedule) {
@@ -191,6 +191,7 @@
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .replace(/\s+/g, ' ')
+      .replace(/^[★•]\s*/, '')
       .trim();
   }
 

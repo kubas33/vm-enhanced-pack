@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Junior Training Parser
 // @namespace    https://vm-manager.org/
-// @version      1.1.3
+// @version      1.1.4
 // @description  Parses junior player data from VM Manager training view HTML/DOM.
 // @grant        none
 // @run-at       document-start
@@ -198,6 +198,7 @@
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .replace(/\s+/g, ' ')
+      .replace(/^[★•]\s*/, '')
       .trim();
   }
 
