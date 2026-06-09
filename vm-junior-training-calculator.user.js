@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Volleyball junior training calculator
 // @namespace    https://vm-manager.org/
-// @version      0.5.0
+// @version      0.5.1
 // @description  Projects junior academy skill growth with comparable allocation strategies.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -690,7 +690,7 @@
     }) || null;
   }
 
-  function loadPlayerIntoPanel(panel, player, loadAllSkills, form) {
+  function loadPlayerIntoPanel(panel, player, skillsMode, form) {
     var ageInput = panel.querySelector('#vjtc-age');
     var skills;
 
@@ -705,11 +705,13 @@
       return;
     }
 
-    if (loadAllSkills) {
-      skills = parser.getTrainableSkills(player.attributes);
-    } else {
-      skills = getRecommendedSkillsForPlayer(player);
+    if (!skillsMode) {
+      return;
     }
+
+    skills = skillsMode === 'all'
+      ? parser.getTrainableSkills(player.attributes)
+      : getRecommendedSkillsForPlayer(player);
 
     setSkillRows(panel, skills, form);
     updateSkillsHint(panel, skills);
@@ -800,7 +802,7 @@
     panel.querySelector('#vjtc-player').addEventListener('change', function () {
       var currentPlayers = parser.parseJuniorPlayersFromForm(form);
       var player = getSelectedPlayer(currentPlayers, panel.querySelector('#vjtc-player').value);
-      loadPlayerIntoPanel(panel, player, false, form);
+      loadPlayerIntoPanel(panel, player, 'recommended', form);
       updatePlayerActionButtonsState(panel, form);
     });
 
@@ -813,7 +815,7 @@
         return;
       }
 
-      loadPlayerIntoPanel(panel, player, true, form);
+      loadPlayerIntoPanel(panel, player, 'all', form);
       updatePlayerActionButtonsState(panel, form);
     });
 
