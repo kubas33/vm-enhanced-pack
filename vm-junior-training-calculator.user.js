@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Volleyball junior training calculator
 // @namespace    https://vm-manager.org/
-// @version      0.5.4
+// @version      0.5.5
 // @description  Projects junior academy skill growth with comparable allocation strategies.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -24,6 +24,7 @@
   var sim = window.VMJuniorTrainingSim;
   var parser = window.VMJuniorTrainingParser;
   var schedule = window.VMMatchesSchedule;
+  var CALCULATOR_VERSION = '0.5.5';
   var SKILLS_HINT_EMPTY = 'Nie udało się ustalić rekomendowanych umiejętności — użyj «Wczytaj wszystkie»';
 
   if (!dom || !positionRules || !sim || !parser || !schedule) {
@@ -1220,8 +1221,10 @@
   function loadScoutCandidateIntoPanel(panel, candidate) {
     var ageInput = panel.querySelector('#vjtc-age');
     var subtitle = panel.querySelector('#vjtc-scout-subtitle');
+    var skills;
 
     panel._vjtcScoutCandidate = candidate;
+    panel.dataset.vjtcVersion = CALCULATOR_VERSION;
 
     if (ageInput && candidate.age != null) {
       ageInput.value = String(candidate.age);
@@ -1231,10 +1234,13 @@
       subtitle.textContent = buildScoutSubtitle(candidate);
     }
 
-    var skills = getRecommendedSkillsForPlayer(candidate);
+    skills = getRecommendedSkillsForPlayer(candidate);
+    panel.dataset.scoutAttributeCount = String(Object.keys(candidate.attributes || {}).length);
+    panel.dataset.scoutRecommendedCount = String(skills.length);
 
     setSkillRows(panel, skills, null);
     updateSkillsHint(panel, skills);
+    return skills;
   }
 
   function findScoutPanelAnchor() {
@@ -1364,8 +1370,9 @@
     }
 
     var signature = buildScoutSignature(candidate);
+    var hasSkillRows = panel.querySelectorAll('.vjtc-skill-row').length > 0;
 
-    if (panel.dataset.scoutSignature !== signature) {
+    if (panel.dataset.scoutSignature !== signature || !hasSkillRows) {
       loadScoutCandidateIntoPanel(panel, candidate);
       panel.dataset.scoutSignature = signature;
     }
