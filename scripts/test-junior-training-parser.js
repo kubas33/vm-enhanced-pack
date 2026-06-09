@@ -32,6 +32,8 @@ var scoutHtml = ''
   + '<TD width="70" align="right"><span class="link">12</span></TD></TR>'
   + '<TR><TD width="1"></TD><TD width="140">Rozgrywanie</TD>'
   + '<TD width="70" align="right"><span class="link" OnClick="callGetViewPanelBody_1(&quot;TrainingEffect&amp;playerId=1&quot;)">6</span></TD></TR>'
+  + '<TR><TD width="1"></TD><TD width="140">Atak ze skrzydła</TD>'
+  + '<TD width="70" align="right">19</TD></TR>'
   + '<TR><TD width="1"></TD><TD width="140">Atak ze środka</TD>'
   + '<TD width="70" align="right">17</TD></TR>'
   + '<TR><TD width="1"></TD><TD width="140">Kiwka</TD>'
@@ -52,6 +54,7 @@ assert.strictEqual(scoutCandidate.name, 'Kiełtyka, Aleksander', 'expected scout
 assert.strictEqual(scoutCandidate.age, 16, 'expected scout candidate age');
 assert.strictEqual(scoutCandidate.position, 'Środkowy', 'expected scout candidate position');
 assert.strictEqual(scoutCandidate.attributes.UM_USTAWIANIE, 18, 'expected Ustawianie from scout fixture');
+assert.strictEqual(scoutCandidate.attributes.UM_ATAK_ZE_SKRZYDLA, 19, 'expected Atak ze skrzydla from scout fixture');
 assert.strictEqual(scoutCandidate.attributes.UM_ROZGRYWANIE, 6, 'expected Rozgrywanie from scout fixture');
 assert.strictEqual(scoutCandidate.attributes.UM_ODPORNOSC, undefined, 'non-trainable scout stats should be ignored');
 
@@ -67,6 +70,44 @@ assert.deepStrictEqual(
     'UM_KIWKA',
   ],
   'scout candidate should load primary then secondary skills'
+);
+
+var pastedScoutHtml = ''
+  + '<TABLE><TR><TD><b>Werwiński, Franciszek (<span>AKS Andrut Kalisz</span>, 16 lat)</b></TD></TR>'
+  + '<TR><TD width="1"></TD><TD width="160">Serwis</TD><TD width="50" align=right>14</TD></TR>'
+  + '<TR><TD width="1"></TD><TD width="160">Atak ze skrzydła</TD><TD width="50" align=right>19</TD></TR>'
+  + '<TR><TD width="1"></TD><TD width="160">Kiwka</TD><TD width="50" align=right>13</TD></TR>'
+  + '<TR><TD width="1"></TD><TD width="160">Atak z 2 linii</TD><TD width="50" align=right>14</TD></TR>'
+  + '<TR><TD width="1"></TD><TD width="160">Omijanie bloku</TD><TD width="50" align=right>13</TD></TR>'
+  + '<TR><TD width="1"></TD><TD width="160">Obrona</TD><TD width="50" align=right>14</TD></TR>'
+  + '<TR><TD width="1"></TD><TD width="160">Asekuracja</TD><TD width="50" align=right>13</TD></TR>'
+  + '<TR><TD width="1"></TD><TD width="160">Ustawianie się do bloku</TD><TD width="50" align=right>13</TD></TR>'
+  + '<TR><TD width="1"></TD><TD width="160">Blok</TD><TD width="50" align=right>15</TD></TR>'
+  + '<TR><TD width=100>Wzrost</TD><TD align=right width=100>186 cm</TD></TR>'
+  + '<TR><TD>Pozycja</TD><TD align=right>Atakujący</TD></TR>'
+  + '<TR><TD><span onclick="YoungPlayerTempAccept()">Akceptuj propozycję</span></TD></TR></TABLE>';
+var pastedScoutCandidate = parser.parseScoutCandidateFromHtml(pastedScoutHtml);
+var pastedScoutRecommended = positionRules.getRecommendedTrainableSkills(
+  pastedScoutCandidate.position,
+  pastedScoutCandidate.attributes
+);
+
+assert.strictEqual(pastedScoutCandidate.position, 'Atakujący', 'expected position from pasted scout html');
+assert.strictEqual(pastedScoutCandidate.attributes.UM_ATAK_ZE_SKRZYDLA, 19, 'expected l-stroke attribute label to parse');
+assert.deepStrictEqual(
+  pastedScoutRecommended.map(function (skill) { return skill.code; }),
+  [
+    'UM_USTAWIANIE',
+    'UM_BLOK_AKTYWNY',
+    'UM_ASEKURACJA',
+    'UM_OBRONA',
+    'UM_SERWIS',
+    'UM_ATAK_ZE_SKRZYDLA',
+    'UM_KIWKA',
+    'UM_ATAK_2L',
+    'UM_OMIJANIE_BLOKU',
+  ],
+  'pasted scout html should load attacker primary then secondary skills'
 );
 
 var poolHtml = ''

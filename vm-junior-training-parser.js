@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Junior Training Parser
 // @namespace    https://vm-manager.org/
-// @version      1.1.2
+// @version      1.1.3
 // @description  Parses junior player data from VM Manager training view HTML/DOM.
 // @grant        none
 // @run-at       document-start
@@ -194,6 +194,7 @@
   function normalizeSkillLabel(label) {
     return String(label || '')
       .toLowerCase()
+      .replace(/ł/g, 'l')
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .replace(/\s+/g, ' ')
@@ -237,6 +238,22 @@
     }
 
     return rows;
+  }
+
+  function getTableRowsFromDom(root) {
+    var scope = root && root.querySelectorAll ? root : null;
+
+    if (!scope) {
+      return [];
+    }
+
+    return Array.prototype.map.call(scope.querySelectorAll('tr'), function (row) {
+      return Array.prototype.map.call(row.children || [], function (cell) {
+        return htmlToText(cell.textContent || '');
+      });
+    }).filter(function (cells) {
+      return cells.length >= 2;
+    });
   }
 
   function unescapeVmString(value) {
@@ -448,9 +465,8 @@
     return null;
   }
 
-  function parseScoutAttributesFromHtml(html) {
+  function parseScoutAttributesFromRows(rows) {
     var attributes = {};
-    var rows = getTableRowsFromHtml(html);
     var i;
     var cells;
     var label;
@@ -483,6 +499,10 @@
     return attributes;
   }
 
+  function parseScoutAttributesFromHtml(html) {
+    return parseScoutAttributesFromRows(getTableRowsFromHtml(html));
+  }
+
   function parseScoutHeaderFromHtml(html) {
     var source = String(html || '');
     var acceptIdx = source.indexOf(SCOUT_ACCEPT_MARKER);
@@ -503,8 +523,7 @@
     };
   }
 
-  function parseScoutPositionFromHtml(html) {
-    var rows = getTableRowsFromHtml(html);
+  function parseScoutPositionFromRows(rows) {
     var i;
     var cells;
 
@@ -519,6 +538,10 @@
     }
 
     return '';
+  }
+
+  function parseScoutPositionFromHtml(html) {
+    return parseScoutPositionFromRows(getTableRowsFromHtml(html));
   }
 
   function parseScoutCandidateFromHtml(html) {
@@ -546,12 +569,34 @@
 
   function parseScoutCandidateFromRoot(root) {
     var container = findScoutCandidateContainer(root || document);
+    var candidate;
+    var rows;
+    var attributes;
+    var position;
 
     if (!container) {
       return null;
     }
 
-    return parseScoutCandidateFromHtml(container.innerHTML || container.outerHTML || '');
+    candidate = parseScoutCandidateFromHtml(container.innerHTML || container.outerHTML || '');
+
+    if (!candidate) {
+      return null;
+    }
+
+    rows = getTableRowsFromDom(container);
+    attributes = parseScoutAttributesFromRows(rows);
+    position = parseScoutPositionFromRows(rows);
+
+    if (Object.keys(attributes).length) {
+      candidate.attributes = attributes;
+    }
+
+    if (position) {
+      candidate.position = position;
+    }
+
+    return candidate;
   }
 
   function isScoutView(root) {
