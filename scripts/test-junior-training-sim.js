@@ -31,6 +31,38 @@ assert.strictEqual(sim.sessionsToLevelUp(25, 17), 8, 'age 17 adds +1 to tier 25+
 assert.strictEqual(sim.totalTrainingBudget(33, 100), 433, 'budget with 33 start pool and 100 days');
 assert.strictEqual(sim.totalTrainingBudget(0, 10), 40, 'budget with empty pool and 10 days');
 assert.strictEqual(sim.getCareerDays(16, 45, 90), 45 + 90 + 90, '16yo with 45 days left gets 3 season chunks');
+assert.strictEqual(sim.normalizeJuniorCount(-2), 0, 'junior count should clamp low values');
+assert.strictEqual(sim.normalizeJuniorCount(20), 14, 'junior count should clamp high values');
+assert.strictEqual(sim.getJuniorTrainingEfficiency(7), 1, '7 juniors should keep full training efficiency');
+assert.ok(
+  Math.abs(sim.getJuniorTrainingEfficiency(8) - (13 / 14)) < 0.000001,
+  '8 juniors should reduce training efficiency by one overload step'
+);
+assert.strictEqual(sim.getJuniorTrainingEfficiency(14), 0.5, '14 juniors should halve training efficiency');
+
+var fullEfficiencyResult = sim.simulate({
+  age: 16,
+  daysLeftInSeason: 500,
+  seasonDays: 90,
+  trainingPool: 0,
+  juniorCount: 7,
+  strategy: 'priority',
+  skills: [{ code: 'UM_PRZYJECIE', level: 7, targetLevel: 30.5 }],
+});
+var overloadedResult = sim.simulate({
+  age: 16,
+  daysLeftInSeason: 500,
+  seasonDays: 90,
+  trainingPool: 0,
+  juniorCount: 14,
+  strategy: 'priority',
+  skills: [{ code: 'UM_PRZYJECIE', level: 7, targetLevel: 30.5 }],
+});
+
+assert.strictEqual(fullEfficiencyResult.skills[0].trainingsUsed, 137, '7 juniors should keep the old training cost');
+assert.strictEqual(overloadedResult.trainingEfficiency, 0.5, '14 juniors should be simulated at half efficiency');
+assert.strictEqual(overloadedResult.skills[0].trainingsUsed, 274, '14 juniors should need twice as many points as 7 juniors');
+assert.strictEqual(overloadedResult.skills[0].reachedTarget, true, 'overloaded training should still reach target with enough days');
 
 var tightInput = {
   age: 18,

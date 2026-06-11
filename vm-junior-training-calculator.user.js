@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Volleyball junior training calculator
 // @namespace    https://vm-manager.org/
-// @version      0.5.7
+// @version      0.5.9
 // @description  Projects junior academy skill growth with comparable allocation strategies.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -24,7 +24,7 @@
   var sim = window.VMJuniorTrainingSim;
   var parser = window.VMJuniorTrainingParser;
   var schedule = window.VMMatchesSchedule;
-  var CALCULATOR_VERSION = '0.5.7';
+  var CALCULATOR_VERSION = '0.5.8';
   var SKILLS_HINT_EMPTY = 'Nie udało się ustalić rekomendowanych umiejętności — użyj «Wczytaj wszystkie»';
 
   if (!dom || !positionRules || !sim || !parser || !schedule) {
@@ -38,6 +38,8 @@
   var SCHEDULE_CACHE_TTL_MS = 5 * 60 * 1000;
   var POOL_CACHE_KEY = 'vjtc.juniorTrainingPool.v1';
   var POOL_CACHE_TTL_MS = 5 * 60 * 1000;
+  var JUNIOR_COUNT_CACHE_KEY = 'vjtc.juniorCount.v1';
+  var JUNIOR_COUNT_CACHE_TTL_MS = 5 * 60 * 1000;
   var schedulePromise = null;
   var trainingPoolPromise = null;
 
@@ -145,7 +147,7 @@
       + '.vjtc-player-row{display:grid;grid-template-columns:1fr auto;gap:8px;margin-bottom:8px;align-items:end;}'
       + '.vjtc-player-actions{display:flex;gap:6px;flex-wrap:wrap;}'
       + '.vjtc-btn:disabled{opacity:.5;cursor:not-allowed;}'
-      + '.vjtc-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:8px;}'
+      + '.vjtc-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:8px;}'
       + '.vjtc-hint{margin:0 0 8px;color:#9ec7de;font-size:10px;}'
       + '.vjtc-grid label{display:flex;flex-direction:column;gap:3px;}'
       + '.vjtc-grid input,.vjtc-grid select{width:100%;box-sizing:border-box;}'
@@ -555,6 +557,8 @@
     var playerRow = panel.querySelector('.vjtc-player-row');
     var loadButton = panel.querySelector('#vjtc-load-player');
     var refreshAllButton = panel.querySelector('#vjtc-refresh-levels');
+    var grid = panel.querySelector('.vjtc-grid');
+    var seasonDaysInput = panel.querySelector('#vjtc-season-days');
 
     if (playerRow && loadButton && !refreshAllButton) {
       var actions = document.createElement('div');
@@ -570,6 +574,19 @@
       actions.appendChild(refreshAllButton);
     }
 
+    if (grid && !panel.querySelector('#vjtc-junior-count')) {
+      var juniorCountLabel = document.createElement('label');
+      juniorCountLabel.innerHTML = 'Juniorzy<input id="vjtc-junior-count" type="number" min="0" max="'
+        + escapeHtml(sim.CONFIG.maxJuniorCount)
+        + '" step="1" value="' + escapeHtml(sim.CONFIG.optimalJuniorCount) + '">'
+        + '<span class="vjtc-field-hint" id="vjtc-junior-count-hint"></span>';
+      if (seasonDaysInput && seasonDaysInput.closest('label')) {
+        grid.insertBefore(juniorCountLabel, seasonDaysInput.closest('label'));
+      } else {
+        grid.appendChild(juniorCountLabel);
+      }
+    }
+
     panel.querySelectorAll('.vjtc-skill-row').forEach(function (row) {
       upgradeSkillRow(row, true);
     });
@@ -581,6 +598,15 @@
     panel.dataset.vjtcControlsBound = '1';
 
     panel.addEventListener('change', function (event) {
+      if (event.target.id === 'vjtc-junior-count') {
+        panel.dataset.juniorCountManual = '1';
+        var juniorCountHint = panel.querySelector('#vjtc-junior-count-hint');
+        if (juniorCountHint) {
+          juniorCountHint.textContent = 'Ustawione recznie.';
+        }
+        return;
+      }
+
       if (!event.target.classList.contains('vjtc-skill-code')) {
         return;
       }
@@ -588,6 +614,12 @@
       var player = getActivePlayer(panel, form);
       if (row && player) {
         setRowLevelFromPlayer(row, player);
+      }
+    });
+
+    panel.addEventListener('input', function (event) {
+      if (event.target.id === 'vjtc-junior-count') {
+        panel.dataset.juniorCountManual = '1';
       }
     });
 
@@ -733,6 +765,81 @@
     } catch (error) {
       // ignore storage failures
     }
+  }
+
+  function readJuniorCountCache() {
+    try {
+      var raw = window.sessionStorage.getItem(JUNIOR_COUNT_CACHE_KEY);
+      if (!raw) {
+        return null;
+      }
+
+      var cached = JSON.parse(raw);
+      if (!cached || Date.now() - cached.savedAt > JUNIOR_COUNT_CACHE_TTL_MS) {
+        return null;
+      }
+
+      return cached.count;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function writeJuniorCountCache(count) {
+    try {
+      window.sessionStorage.setItem(JUNIOR_COUNT_CACHE_KEY, JSON.stringify({
+        savedAt: Date.now(),
+        count: sim.normalizeJuniorCount(count),
+      }));
+    } catch (error) {
+      // ignore storage failures
+    }
+  }
+
+  function applyJuniorCountToPanel(panel, count, hintText) {
+    var input = panel.querySelector('#vjtc-junior-count');
+    var hint = panel.querySelector('#vjtc-junior-count-hint');
+    var normalized = sim.normalizeJuniorCount(count);
+
+    if (!input || document.activeElement === input || panel.dataset.juniorCountManual === '1') {
+      return;
+    }
+
+    input.value = String(normalized);
+
+    if (hint && hintText) {
+      hint.textContent = hintText;
+    }
+  }
+
+  function refreshJuniorCountFromForm(panel, form) {
+    var count = parser.parseJuniorPlayersFromForm(form).length;
+
+    writeJuniorCountCache(count);
+    applyJuniorCountToPanel(
+      panel,
+      count,
+      'Aut. z listy juniorow: ' + count + '/' + sim.CONFIG.maxJuniorCount
+    );
+  }
+
+  function refreshJuniorCountFromCache(panel) {
+    var cached = readJuniorCountCache();
+
+    if (cached !== null) {
+      applyJuniorCountToPanel(
+        panel,
+        cached,
+        'Z ostatniej wizyty w treningu juniorow: ' + cached + '/' + sim.CONFIG.maxJuniorCount
+      );
+      return;
+    }
+
+    applyJuniorCountToPanel(
+      panel,
+      sim.CONFIG.optimalJuniorCount,
+      'Domyslnie: ' + sim.CONFIG.optimalJuniorCount + '/' + sim.CONFIG.maxJuniorCount
+    );
   }
 
   function fetchJuniorTrainingPoolFromAction(action) {
@@ -1078,6 +1185,7 @@
     var poolData = parseTrainingPoolFromForm(form);
     var defaultPool = poolData ? poolData.current : 0;
     var players = parser.parseJuniorPlayersFromForm(form);
+    var defaultJuniorCount = sim.normalizeJuniorCount(players.length);
 
     panel.innerHTML = ''
       + '<h3 class="vjtc-title">Kalkulator treningu juniorow</h3>'
@@ -1095,6 +1203,8 @@
       + '<span class="vjtc-field-hint" id="vjtc-days-left-hint"></span></label>'
       + '<label>Pula pkt<input id="vjtc-pool" type="number" min="0" max="' + escapeHtml(sim.CONFIG.poolCap) + '" step="1" value="' + escapeHtml(defaultPool) + '">'
       + '<span class="vjtc-field-hint" id="vjtc-pool-hint"></span></label>'
+      + '<label>Juniorzy<input id="vjtc-junior-count" type="number" min="0" max="' + escapeHtml(sim.CONFIG.maxJuniorCount) + '" step="1" value="' + escapeHtml(defaultJuniorCount) + '">'
+      + '<span class="vjtc-field-hint" id="vjtc-junior-count-hint"></span></label>'
       + '<label>Dni sezonu<input id="vjtc-season-days" type="number" min="1" step="1" value="' + escapeHtml(sim.CONFIG.seasonDays) + '"></label>'
       + '</div>'
       + '<p class="vjtc-hint">Kolejnosc umiejetnosci = priorytet strategii „Priorytet” (▲▼). Wybor zawodnika laduje rekomendowane umiejetnosci pozycji.</p>'
@@ -1202,6 +1312,7 @@
       age: parseNumber(panel.querySelector('#vjtc-age').value, 16),
       daysLeftInSeason: parseNumber(panel.querySelector('#vjtc-days-left').value, 0),
       trainingPool: parseNumber(panel.querySelector('#vjtc-pool').value, 0),
+      juniorCount: parseNumber(panel.querySelector('#vjtc-junior-count').value, sim.CONFIG.optimalJuniorCount),
       seasonDays: parseNumber(panel.querySelector('#vjtc-season-days').value, sim.CONFIG.seasonDays),
       skills: skills,
       strategies: strategies.length ? strategies : DEFAULT_STRATEGIES,
@@ -1210,6 +1321,10 @@
 
   function formatLevel(level) {
     return Number(level).toFixed(1).replace(/\.0$/, '');
+  }
+
+  function formatPercent(value) {
+    return (Number(value) * 100).toFixed(2).replace('.', ',') + '%';
   }
 
   function renderResults(panel, input) {
@@ -1249,6 +1364,9 @@
     var first = results[0] || null;
     var meta = first
       ? '<div class="vjtc-meta">Horyzont: ' + first.careerDays + ' dni | Treningi: ~' + first.budget
+      + ' | Efektywne tr.: ~' + Math.round(first.effectiveBudget)
+      + ' | Juniorzy: ' + first.juniorCount + '/' + sim.CONFIG.maxJuniorCount
+      + ' | Efektywnosc: ' + escapeHtml(formatPercent(first.trainingEfficiency))
       + (first.wastedPoints ? ' | Stracone pkt (cap): ' + first.wastedPoints : '')
       + '</div>'
       : '';
@@ -1351,6 +1469,10 @@
       panel.id = PANEL_ID;
       panel.className = 'vjtc-panel vjtc-mode-scout';
       panel.dataset.vjtcMode = 'scout';
+      var defaultJuniorCount = readJuniorCountCache();
+      if (defaultJuniorCount === null) {
+        defaultJuniorCount = sim.CONFIG.optimalJuniorCount;
+      }
 
       panel.innerHTML = ''
         + '<h3 class="vjtc-title">Kalkulator treningu juniorow</h3>'
@@ -1362,6 +1484,8 @@
         + '<span class="vjtc-field-hint" id="vjtc-days-left-hint"></span></label>'
         + '<label>Pula pkt<input id="vjtc-pool" type="number" min="0" max="' + escapeHtml(sim.CONFIG.poolCap) + '" step="1" value="0">'
         + '<span class="vjtc-field-hint" id="vjtc-pool-hint"></span></label>'
+        + '<label>Juniorzy<input id="vjtc-junior-count" type="number" min="0" max="' + escapeHtml(sim.CONFIG.maxJuniorCount) + '" step="1" value="' + escapeHtml(defaultJuniorCount) + '">'
+        + '<span class="vjtc-field-hint" id="vjtc-junior-count-hint"></span></label>'
         + '<label>Dni sezonu<input id="vjtc-season-days" type="number" min="1" step="1" value="' + escapeHtml(sim.CONFIG.seasonDays) + '"></label>'
         + '</div>'
         + '<p class="vjtc-hint">Kolejnosc umiejetnosci = priorytet strategii „Priorytet” (▲▼). Kandydat laduje rekomendowane umiejetnosci pozycji.</p>'
@@ -1452,6 +1576,8 @@
       return;
     }
 
+    ensurePanelControls(panel, null);
+
     var signature = buildScoutSignature(candidate);
     var hasSkillRows = panel.querySelectorAll('.vjtc-skill-row').length > 0;
 
@@ -1464,6 +1590,8 @@
       panel.dataset.poolRequested = '1';
       refreshPoolFromTrainingAjax(panel);
     }
+
+    refreshJuniorCountFromCache(panel);
 
     if (!panel.dataset.scheduleRequested) {
       panel.dataset.scheduleRequested = '1';
@@ -1490,6 +1618,7 @@
     refreshPlayerSelect(panel, form);
     refreshPoolFromForm(panel, form);
     ensurePanelControls(panel, form);
+    refreshJuniorCountFromForm(panel, form);
 
     if (!panel.dataset.scheduleRequested) {
       panel.dataset.scheduleRequested = '1';
