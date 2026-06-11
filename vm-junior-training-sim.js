@@ -29,6 +29,9 @@
     seasonDays: 60,
     tierBelow5: 4,
     levelEpsilon: 0.001,
+    optimalJuniorCount: 7,
+    maxJuniorCount: 14,
+    juniorOverloadPenalty: 1 / 14,
   };
 
   var STRATEGY_META = {
@@ -152,6 +155,26 @@
     return firstDay + CONFIG.dailyGain * (totalDays - 1);
   }
 
+  function normalizeJuniorCount(count) {
+    var parsed = Number(count);
+
+    if (!Number.isFinite(parsed)) {
+      return CONFIG.optimalJuniorCount;
+    }
+
+    return Math.max(0, Math.min(CONFIG.maxJuniorCount, Math.round(parsed)));
+  }
+
+  function getJuniorTrainingEfficiency(count) {
+    var juniorCount = normalizeJuniorCount(count);
+
+    if (juniorCount <= CONFIG.optimalJuniorCount) {
+      return 1;
+    }
+
+    return Math.max(0, 1 - ((juniorCount - CONFIG.optimalJuniorCount) * CONFIG.juniorOverloadPenalty));
+  }
+
   function trainingsRequiredForSkill(fromLevel, toLevel, age) {
     var total = 0;
     var current = Number(fromLevel);
@@ -199,24 +222,54 @@
     return indexes;
   }
 
-  function applyTraining(skill, age) {
+  function applyTraining(skill, age, efficiency) {
     var needed = sessionsToNextMilestone(skill.level, age);
+    var leveledUp = false;
 
-    skill.progress += 1;
+    skill.progress += efficiency;
 
-    if (skill.progress < needed) {
-      return false;
+    while (needed > 0 && skill.progress + CONFIG.levelEpsilon >= needed) {
+      skill.progress -= needed;
+      leveledUp = true;
+
+      if (skill.level >= 30 - CONFIG.levelEpsilon) {
+        skill.level = CONFIG.maxLevel;
+      } else {
+        skill.level = Math.floor(skill.level) + 1;
+      }
+
+      skill.levelUps += 1;
+
+      if (!isBelowTarget(skill.level, skill.targetLevel)) {
+        skill.progress = 0;
+        break;
+      }
+
+      needed = sessionsToNextMilestone(skill.level, age);
     }
 
-    if (skill.level >= 30 - CONFIG.levelEpsilon) {
-      skill.level = CONFIG.maxLevel;
-    } else {
-      skill.level = Math.floor(skill.level) + 1;
+    return leveledUp;
+  }
+
+  function remainingEffectiveTrainingsForSkill(skill, age, efficiency) {
+    var clone = {
+      level: skill.level,
+      progress: skill.progress,
+      levelUps: 0,
+      targetLevel: skill.targetLevel,
+    };
+    var remaining = 0;
+
+    if (efficiency <= 0) {
+      return Infinity;
     }
 
-    skill.progress = 0;
-    skill.levelUps += 1;
-    return true;
+    while (isBelowTarget(clone.level, clone.targetLevel)) {
+      applyTraining(clone, age, efficiency);
+      remaining += 1;
+    }
+
+    return remaining;
   }
 
   function createStrategy(strategyId) {
@@ -316,9 +369,12 @@
     var strategy = createStrategy(input.strategy);
     var seasons = getCareerSeasons(age, daysLeftInSeason, seasonDays);
     var skills = cloneSkills(input.skills || [], defaultTargetLevel);
+    var juniorCount = normalizeJuniorCount(input.juniorCount);
+    var trainingEfficiency = getJuniorTrainingEfficiency(juniorCount);
     var pool = Number.isFinite(trainingPool) ? Math.max(0, Math.min(CONFIG.poolCap, trainingPool)) : 0;
     var careerDays = getCareerDays(age, daysLeftInSeason, seasonDays);
     var budget = totalTrainingBudget(pool, careerDays);
+    var effectiveBudget = budget * trainingEfficiency;
     var trainingsUsed = 0;
     var totalLevelUps = 0;
     var wastedPoints = 0;
@@ -353,9 +409,9 @@
 
           skills[skillIndex].trainingsUsed += 1;
 
-          if (applyTraining(skills[skillIndex], season.age)) {
-            totalLevelUps += 1;
-          }
+          totalLevelUps -= skills[skillIndex].levelUps;
+          applyTraining(skills[skillIndex], season.age, trainingEfficiency);
+          totalLevelUps += skills[skillIndex].levelUps;
           pool -= 1;
           trainingsUsed += 1;
         }
@@ -370,6 +426,9 @@
       finalAge: finalAge,
       careerDays: careerDays,
       budget: budget,
+      effectiveBudget: effectiveBudget,
+      juniorCount: juniorCount,
+      trainingEfficiency: trainingEfficiency,
       trainingsUsed: trainingsUsed,
       totalLevelUps: totalLevelUps,
       wastedPoints: wastedPoints,
@@ -378,7 +437,7 @@
           return item.code === skill.code;
         });
         var remaining = isBelowTarget(skill.level, skill.targetLevel)
-          ? trainingsRequiredForSkill(skill.level, skill.targetLevel, finalAge)
+          ? remainingEffectiveTrainingsForSkill(skill, finalAge, trainingEfficiency)
           : 0;
 
         return {
@@ -415,6 +474,8 @@
     sessionsToNextMilestone: sessionsToNextMilestone,
     fullSessionsForFinalBand: fullSessionsForFinalBand,
     isBelowTarget: isBelowTarget,
+    normalizeJuniorCount: normalizeJuniorCount,
+    getJuniorTrainingEfficiency: getJuniorTrainingEfficiency,
     getCareerSeasons: getCareerSeasons,
     getCareerDays: getCareerDays,
     totalTrainingBudget: totalTrainingBudget,
