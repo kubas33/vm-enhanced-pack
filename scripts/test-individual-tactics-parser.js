@@ -57,4 +57,18 @@ assert.strictEqual(
 );
 assert.strictEqual(snapshot['line_1_block_1_atak_1976867'], 1, 'expected Caple attack in snapshot');
 
-console.log('individual tactics parser ok: ' + view.rows.length + ' rows parsed');
+var defenseFixture = fs.readFileSync(path.join(root, 'raw_data', 'individual-tactics-defense-view.md'), 'utf8');
+var defenseHtml = enhancer.extractVmBody(defenseFixture);
+var defenseView = enhancer.parseIndividualViewFromHtml(defenseHtml);
+
+assert.strictEqual(defenseView.columns.length, 2, 'expected two defense columns');
+assert.strictEqual(defenseView.rows.length, 1, 'expected one defense row');
+assert.strictEqual(defenseView.rows[0].fields.obrona.value, 8, 'expected defense value');
+assert.strictEqual(defenseView.rows[0].fields.asekuracja.value, 3, 'expected coverage value');
+assert.strictEqual(
+  enhancer.getPresetMap(defenseView),
+  enhancer.DEFENSE_PRESETS,
+  'expected defense preset map'
+);
+
+console.log('individual tactics parser ok: ' + view.rows.length + ' attack rows, ' + defenseView.rows.length + ' defense rows');

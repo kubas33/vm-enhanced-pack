@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Individual Tactics Enhancer
 // @namespace    https://vm-manager.org/
-// @version      0.1.0
+// @version      0.1.1
 // @description  Bulk edit, position presets and dirty-state tracking for VM Manager individual tactics view.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -42,7 +42,12 @@
   var SIGNATURE_ATTR = 'data-viti-signature';
   var ENHANCED_ATTR = 'data-viti-enhanced';
   var HOLD_INTERVAL_MS = 80;
-  var SPAN_ID_RE = /^line_(\d+)_block_(\d+)_([^_]+)_(\d+)$/;
+
+  var PRESET_HINTS = {
+    attack: 'At/P: 8/1/1 · Śr: 8/3/1 · R/L: 1/1/1 we wszystkich kolumnach ataku',
+    defense: 'At/P/Śr: obrona 8, asekuracja 1 · R/L: 1/1',
+    generic: 'Pierwsza kolumna 8 (1 dla R/L), pozostałe kolumny 1'
+  };
 
   var POSITION_FILTERS = ['', 'At', 'P', 'R', 'Śr', 'L'];
 
@@ -62,6 +67,14 @@
     Sr: { obr: 8, asek: 1 },
     R: { obr: 1, asek: 1 },
     L: { obr: 1, asek: 1 }
+  };
+
+  var PRESET_FIELD_ALIASES = {
+    obr: ['obr', 'obrona'],
+    asek: ['asek', 'asekuracja'],
+    atak: ['atak'],
+    kiwka: ['kiwka'],
+    out: ['out']
   };
 
   var state = {
@@ -116,18 +129,119 @@
   }
 
   function parseSpanId(spanId) {
-    var match = String(spanId || '').match(SPAN_ID_RE);
+    var id = String(spanId || '');
+    var match;
 
-    if (!match) {
+    match = id.match(/^line_(\d+)_block_(\d+)_([^_]+)_(\d+)$/);
+    if (match) {
+      return {
+        line: match[1],
+        block: match[2],
+        field: match[3],
+        playerId: match[4]
+      };
+    }
+
+    match = id.match(/^line_(\d+)_([^_]+)_(\d+)$/);
+    if (match) {
+      return {
+        line: match[1],
+        block: '',
+        field: match[2],
+        playerId: match[3]
+      };
+    }
+
+    match = id.match(/^([^_]+)_(\d+)$/);
+    if (match) {
+      return {
+        field: match[1],
+        playerId: match[2]
+      };
+    }
+
+    match = id.match(/^(.+)_(\d+)$/);
+    if (match) {
+      return {
+        field: match[1].split('_').pop(),
+        playerId: match[2]
+      };
+    }
+
+    return null;
+  }
+
+  function isTacticsValueSpan(span) {
+    var cell;
+
+    if (!span || !span.id || !span.closest) {
+      return false;
+    }
+
+    cell = span.closest('td');
+
+    return Boolean(
+      cell &&
+      cell.querySelector('input.sector_plus_minus') &&
+      /^\d+$/.test(normalizeText(span.textContent))
+    );
+  }
+
+  function collectValueSpans(documentRef) {
+    var seen = {};
+    var result = [];
+
+    dom.queryVisibleAll(documentRef, 'span[id]').forEach(function (span) {
+      var parsed;
+
+      if (!isTacticsValueSpan(span)) {
+        return;
+      }
+
+      parsed = parseSpanId(span.id);
+
+      if (!parsed || seen[span.id]) {
+        return;
+      }
+
+      seen[span.id] = true;
+      result.push(span);
+    });
+
+    return result;
+  }
+
+  function findColumnHeaderAnchor(documentRef) {
+    var headerFont = dom.queryVisibleAll(documentRef, 'font.center').find(function (node) {
+      var cell = node.closest('td');
+
+      return normalizeText(node.textContent).length > 0 &&
+        cell &&
+        /fourth/.test(String(cell.className || ''));
+    });
+    var node;
+
+    if (!headerFont) {
+      headerFont = dom.queryVisibleAll(documentRef, 'font.center').find(function (node) {
+        return normalizeText(node.textContent).length > 0;
+      });
+    }
+
+    if (!headerFont) {
       return null;
     }
 
-    return {
-      line: match[1],
-      block: match[2],
-      field: match[3],
-      playerId: match[4]
-    };
+    node = headerFont;
+
+    while (node && node.nodeType === 1) {
+      if (node.tagName === 'TR' && node.querySelector('font.center')) {
+        return node;
+      }
+
+      node = node.parentElement;
+    }
+
+    return null;
   }
 
   function readSpanBounds(span) {
@@ -185,6 +299,23 @@
   }
 
   function parseColumnLabels(documentRef) {
+    var headerRow = findColumnHeaderAnchor(documentRef);
+    var labels;
+
+    if (headerRow) {
+      labels = Array.prototype.slice.call(headerRow.querySelectorAll('font.center'))
+        .map(function (node) {
+          return normalizeText(node.textContent);
+        })
+        .filter(function (label) {
+          return label.length > 0;
+        });
+
+      if (labels.length) {
+        return labels;
+      }
+    }
+
     return dom.queryVisibleAll(documentRef, 'font.center')
       .map(function (node) {
         return normalizeText(node.textContent);
@@ -252,7 +383,7 @@
       var playerId = rowMatch[2];
       var rowChunk = rowMatch[3];
       var fields = {};
-      var spanRegex = /<span id=(['"])(line_[^'"]+)\1>(\d+)<\/span>/gi;
+      var spanRegex = /<span id=(['"])([^'"]+)\1>(\d+)<\/span>/gi;
       var spanMatch;
 
       while ((spanMatch = spanRegex.exec(rowChunk)) !== null) {
@@ -316,7 +447,7 @@
   }
 
   function parseIndividualView(documentRef) {
-    var spans = dom.queryVisibleAll(documentRef, 'span[id^="line_"]');
+    var spans = collectValueSpans(documentRef);
     var byPlayer = {};
     var rows = [];
     var columns = [];
@@ -410,11 +541,12 @@
       select &&
       select.querySelector('option[value*="Squad&opt="]')
     );
-    var hasValueSpans = dom.queryVisibleAll(documentRef, 'span[id^="line_"]').some(function (span) {
-      return Boolean(parseSpanId(span.id));
+    var hasSaveLink = dom.queryVisibleAll(documentRef, 'span.link').some(function (link) {
+      return getOnClick(link).indexOf('IndividualSave') !== -1;
     });
+    var hasValueSpans = collectValueSpans(documentRef).length > 0;
 
-    return hasScenarioSelect && hasValueSpans;
+    return hasScenarioSelect && (hasValueSpans || hasSaveLink);
   }
 
   function takeSnapshot(view) {
@@ -509,6 +641,31 @@
     });
   }
 
+  function findFieldCell(row, presetField) {
+    var names = PRESET_FIELD_ALIASES[presetField] || [presetField];
+    var i;
+
+    for (i = 0; i < names.length; i += 1) {
+      if (row.fields[names[i]]) {
+        return row.fields[names[i]];
+      }
+    }
+
+    return null;
+  }
+
+  function applyPresetToRow(documentRef, row, preset) {
+    Object.keys(preset).forEach(function (presetField) {
+      var cell = findFieldCell(row, presetField);
+
+      if (!cell) {
+        return;
+      }
+
+      setSpanValue(documentRef, cell.spanId, preset[presetField], cell.bounds);
+    });
+  }
+
   function applyPositionPresets(documentRef, view, presetMap) {
     view.rows.forEach(function (row) {
       var preset = presetMap[row.positionShort] || presetMap.Sr;
@@ -517,14 +674,24 @@
         return;
       }
 
-      Object.keys(preset).forEach(function (field) {
-        if (!row.fields[field]) {
-          return;
-        }
+      applyPresetToRow(documentRef, row, preset);
+    });
+  }
 
-        setSpanValue(documentRef, row.fields[field].spanId, preset[field], row.fields[field].bounds);
+  function buildGenericPresets(view) {
+    var presets = {};
+    var positions = ['At', 'P', 'Śr', 'Sr', 'R', 'L'];
+
+    positions.forEach(function (position) {
+      var isLowPriority = position === 'R' || position === 'L';
+
+      presets[position] = {};
+      view.columns.forEach(function (column, index) {
+        presets[position][column.field] = isLowPriority ? 1 : (index === 0 ? 8 : 1);
       });
     });
+
+    return presets;
   }
 
   function getPresetMap(view) {
@@ -536,11 +703,33 @@
       return ATTACK_PRESETS;
     }
 
-    if (fields.indexOf('obr') !== -1 || fields.indexOf('asek') !== -1) {
+    if (fields.indexOf('obr') !== -1 || fields.indexOf('asek') !== -1 ||
+        fields.indexOf('obrona') !== -1 || fields.indexOf('asekuracja') !== -1) {
       return DEFENSE_PRESETS;
     }
 
+    if (view.columns.length) {
+      return buildGenericPresets(view);
+    }
+
     return null;
+  }
+
+  function getPresetHint(view) {
+    var fields = view.columns.map(function (column) {
+      return column.field;
+    });
+
+    if (fields.indexOf('atak') !== -1) {
+      return PRESET_HINTS.attack;
+    }
+
+    if (fields.indexOf('obr') !== -1 || fields.indexOf('asek') !== -1 ||
+        fields.indexOf('obrona') !== -1 || fields.indexOf('asekuracja') !== -1) {
+      return PRESET_HINTS.defense;
+    }
+
+    return PRESET_HINTS.generic;
   }
 
   function updateRowVisibility(view, positionFilter) {
@@ -626,6 +815,11 @@
       '  background: #0f1720;',
       '  color: #eef4fa;',
       '  border: 1px solid #58708a;',
+      '}',
+      '#' + PANEL_ID + ' .viti-preset-hint {',
+      '  color: #7f93a8;',
+      '  font-size: 11px;',
+      '  flex-basis: 100%;',
       '}'
     ].join('\n');
     documentRef.head.appendChild(style);
@@ -821,41 +1015,20 @@
   }
 
   function insertPanel(documentRef, panel) {
-    var firstPlayerSpan = dom.queryVisibleFirst(documentRef, 'span[id^="line_"]');
-    var playerTable;
-    var playerRowTr;
-    var panelTr;
-    var panelTd;
+    var anchorRow = findColumnHeaderAnchor(documentRef);
+    var panelTr = documentRef.createElement('tr');
+    var panelTd = documentRef.createElement('td');
 
-    if (!firstPlayerSpan) {
-      documentRef.body.appendChild(panel);
-      return;
-    }
-
-    playerTable = findPlayerRowContainer(firstPlayerSpan);
-
-    if (!playerTable) {
-      documentRef.body.appendChild(panel);
-      return;
-    }
-
-    playerRowTr = playerTable;
-
-    while (playerRowTr && playerRowTr.tagName !== 'TR') {
-      playerRowTr = playerRowTr.parentElement;
-    }
-
-    if (!playerRowTr || !playerRowTr.parentElement) {
-      documentRef.body.appendChild(panel);
-      return;
-    }
-
-    panelTr = documentRef.createElement('tr');
-    panelTd = documentRef.createElement('td');
     panelTd.colSpan = 10;
     panelTd.appendChild(panel);
     panelTr.appendChild(panelTd);
-    playerRowTr.parentElement.insertBefore(panelTr, playerRowTr);
+
+    if (anchorRow && anchorRow.parentElement) {
+      anchorRow.parentElement.insertBefore(panelTr, anchorRow);
+      return;
+    }
+
+    documentRef.body.appendChild(panel);
   }
 
   function buildPanel(documentRef, view) {
@@ -938,15 +1111,21 @@
     presetRow.className = 'viti-row';
     presetRow.appendChild(documentRef.createElement('label')).textContent = 'Presety:';
 
+    var presetHint = documentRef.createElement('span');
+    presetHint.className = 'viti-preset-hint';
+    presetHint.textContent = getPresetHint(view);
+    presetHint.title = getPresetHint(view);
+
     [
-      { label: 'At/P', positions: ['At', 'P'] },
-      { label: 'Śr', positions: ['Śr', 'Sr'] },
-      { label: 'R/L', positions: ['R', 'L'] },
-      { label: 'Wszystkie pozycje', positions: null }
+      { label: 'At/P', positions: ['At', 'P'], title: 'Atakujący i przyjmujący — wartości z presetu pozycji' },
+      { label: 'Śr', positions: ['Śr', 'Sr'], title: 'Środkowi — wartości z presetu pozycji' },
+      { label: 'R/L', positions: ['R', 'L'], title: 'Rozgrywający i libero — wartości z presetu pozycji' },
+      { label: 'Wszystkie pozycje', positions: null, title: 'Zastosuj presety do wszystkich pozycji naraz' }
     ].forEach(function (presetAction) {
       var button = documentRef.createElement('button');
       button.type = 'button';
       button.textContent = presetAction.label;
+      button.title = presetAction.title;
       button.addEventListener('click', function () {
         var presetMap = getPresetMap(view);
         var targetRows;
@@ -961,13 +1140,7 @@
           });
           targetRows.forEach(function (row) {
             var preset = presetMap[row.positionShort] || presetMap.Sr;
-            Object.keys(preset).forEach(function (field) {
-              if (!row.fields[field]) {
-                return;
-              }
-
-              setSpanValue(documentRef, row.fields[field].spanId, preset[field], row.fields[field].bounds);
-            });
+            applyPresetToRow(documentRef, row, preset);
           });
         } else {
           applyPositionPresets(documentRef, view, presetMap);
@@ -977,6 +1150,8 @@
       });
       presetRow.appendChild(button);
     });
+
+    presetRow.appendChild(presetHint);
 
     statusRow.className = 'viti-row';
     statusNode.className = 'viti-status';
@@ -1098,6 +1273,10 @@
     takeSnapshot: takeSnapshot,
     countDirtyChanges: countDirtyChanges,
     getPresetMap: getPresetMap,
+    getPresetHint: getPresetHint,
+    buildGenericPresets: buildGenericPresets,
+    findColumnHeaderAnchor: findColumnHeaderAnchor,
+    collectValueSpans: collectValueSpans,
     ATTACK_PRESETS: ATTACK_PRESETS,
     DEFENSE_PRESETS: DEFENSE_PRESETS
   };
