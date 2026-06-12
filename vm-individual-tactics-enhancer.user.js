@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Individual Tactics Enhancer
 // @namespace    https://vm-manager.org/
-// @version      0.2.4
+// @version      0.2.5
 // @description  Bulk edit, player selection, attribute chips, position presets and dirty-state tracking for VM Manager individual tactics view.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -51,7 +51,8 @@
 
   var STYLE_ID = 'viti-style';
   var PANEL_ID = 'viti-bulk-panel';
-  var CARD_CLASS = 'viti-tactics-card';
+  var HOST_CLASS = 'viti-tactics-host';
+  var ENHANCE_SUPPRESS_MS = 400;
   var SIGNATURE_ATTR = 'data-viti-signature';
   var ENHANCED_ATTR = 'data-viti-enhanced';
   var ROW_ENHANCED_ATTR = 'data-viti-row-enhanced';
@@ -134,8 +135,18 @@
     scenarioPreviousIndex: 0,
     holdTimer: null,
     updateSelectionUi: null,
-    updatePositionFilterUi: null
+    updatePositionFilterUi: null,
+    isEnhancing: false,
+    enhanceSuppressUntil: 0
   };
+
+  function shouldSuppressEnhance() {
+    return state.isEnhancing || Date.now() < state.enhanceSuppressUntil;
+  }
+
+  function markEnhanceSuppress() {
+    state.enhanceSuppressUntil = Date.now() + ENHANCE_SUPPRESS_MS;
+  }
 
   function normalizeText(value) {
     return String(value || '').replace(/\s+/g, ' ').trim();
@@ -1405,15 +1416,6 @@
     }
 
     style.textContent = [
-      '.' + CARD_CLASS + ' {',
-      '  margin: 0;',
-      '  width: 100%;',
-      '  box-sizing: border-box;',
-      '  border: 1px solid ' + PANEL_BORDER + ';',
-      '  border-radius: ' + CARD_RADIUS + ';',
-      '  background: ' + PANEL_BG + ';',
-      '  overflow: hidden;',
-      '}',
       '#' + PANEL_ID + ' {',
       '  margin: 0;',
       '  padding: 8px 10px;',
@@ -1426,15 +1428,23 @@
       '  box-sizing: border-box;',
       '}',
       '#' + PANEL_ID + '.viti-panel-attached {',
-      '  border: none;',
-      '  border-radius: 0;',
+      '  border: 1px solid ' + PANEL_BORDER + ';',
       '  border-bottom: 1px solid ' + PANEL_BORDER + ';',
+      '  border-radius: ' + CARD_RADIUS + ' ' + CARD_RADIUS + ' 0 0;',
+      '}',
+      '.' + HOST_CLASS + ' table.viti-tactics-header-table {',
+      '  width: 100%;',
+      '  border-collapse: collapse;',
+      '  margin: 0;',
+      '  border: 1px solid ' + PANEL_BORDER + ';',
+      '  border-top: none;',
+      '  border-radius: 0 0 ' + CARD_RADIUS + ' ' + CARD_RADIUS + ';',
+      '  overflow: hidden;',
       '}',
       'table.viti-tactics-header-table {',
       '  width: 100%;',
       '  border-collapse: collapse;',
       '  margin: 0;',
-      '  border: none;',
       '}',
       'table.viti-tactics-header-table tr.viti-header-decor-row {',
       '  display: none;',
@@ -1688,31 +1698,6 @@
     });
   }
 
-  function unwrapTacticsCard(documentRef) {
-    var card = documentRef.querySelector('.' + CARD_CLASS);
-    var headerTable;
-    var panel;
-    var host;
-
-    if (!card) {
-      return;
-    }
-
-    host = card.parentElement;
-    headerTable = card.querySelector('table.viti-tactics-header-table') || card.querySelector('table');
-    panel = card.querySelector('#' + PANEL_ID);
-
-    if (headerTable && host) {
-      host.insertBefore(headerTable, card);
-    }
-
-    if (panel) {
-      panel.classList.remove('viti-panel-attached');
-    }
-
-    card.remove();
-  }
-
   function updateDirtyFieldMarkers(documentRef, snapshot) {
     documentRef.querySelectorAll('.viti-dirty-value').forEach(function (node) {
       node.classList.remove('viti-dirty-value');
@@ -1955,15 +1940,11 @@
   function insertPanel(documentRef, panel) {
     var headerTable = findTacticsHeaderTable(documentRef);
     var host = headerTable ? headerTable.parentElement : null;
-    var card;
 
     if (host && headerTable) {
-      card = documentRef.createElement('div');
-      card.className = CARD_CLASS;
-      host.insertBefore(card, headerTable);
+      host.classList.add(HOST_CLASS);
       panel.classList.add('viti-panel-attached');
-      card.appendChild(panel);
-      card.appendChild(headerTable);
+      host.insertBefore(panel, headerTable);
       stylePanelHeaderIntegration(documentRef, headerTable);
       tightenTacticsSpacing(documentRef);
       return;
@@ -2170,19 +2151,31 @@
   }
 
   function getViewSignature(view) {
+    var playerIds = view.rows.map(function (row) {
+      return row.playerId;
+    });
+
+    playerIds.sort();
+
     return [
       view.scenarioOpt,
       view.columns.map(function (column) {
         return column.field;
       }).join(','),
-      view.rows.map(function (row) {
-        return row.playerId;
-      }).join(',')
+      playerIds.join(',')
     ].join('|');
   }
 
   function cleanupIndividualEnhancements(documentRef) {
-    unwrapTacticsCard(documentRef);
+    var panel = documentRef.getElementById(PANEL_ID);
+
+    if (panel) {
+      panel.remove();
+    }
+
+    documentRef.querySelectorAll('.' + HOST_CLASS).forEach(function (host) {
+      host.classList.remove(HOST_CLASS);
+    });
 
     dom.queryVisibleAll(documentRef, '.viti-save-dirty').forEach(function (node) {
       node.classList.remove('viti-save-dirty');
@@ -2198,6 +2191,8 @@
     state.positionVisibilityScenario = '';
     state.updateSelectionUi = null;
     state.updatePositionFilterUi = null;
+    state.isEnhancing = false;
+    state.enhanceSuppressUntil = 0;
   }
 
   function enhanceIndividualTactics(documentRef) {
@@ -2206,51 +2201,67 @@
     var existingPanel;
     var built;
 
-    if (!isIndividualTacticsView(documentRef)) {
+    if (shouldSuppressEnhance()) {
+      return;
+    }
+
+    state.isEnhancing = true;
+
+    try {
+      existingPanel = documentRef.getElementById(PANEL_ID);
+
+      if (!isIndividualTacticsView(documentRef)) {
+        if (!existingPanel) {
+          cleanupIndividualEnhancements(documentRef);
+        }
+
+        return;
+      }
+
+      view = parseIndividualView(documentRef);
+
+      if (!view.rows.length) {
+        return;
+      }
+
+      signature = getViewSignature(view);
+      existingPanel = documentRef.getElementById(PANEL_ID);
+
+      if (existingPanel && existingPanel.getAttribute(SIGNATURE_ATTR) === signature) {
+        ensureStyles(documentRef);
+        stylePanelHeaderIntegration(documentRef, findTacticsHeaderTable(documentRef));
+        tightenTacticsSpacing(documentRef);
+        updateDirtyUi(documentRef, existingPanel.querySelector('.viti-status'));
+        return;
+      }
+
       cleanupIndividualEnhancements(documentRef);
-      return;
-    }
-
-    view = parseIndividualView(documentRef);
-
-    if (!view.rows.length) {
-      return;
-    }
-
-    signature = getViewSignature(view);
-    existingPanel = documentRef.getElementById(PANEL_ID);
-
-    if (existingPanel && existingPanel.getAttribute(SIGNATURE_ATTR) === signature) {
       ensureStyles(documentRef);
-      stylePanelHeaderIntegration(documentRef, findTacticsHeaderTable(documentRef));
-      tightenTacticsSpacing(documentRef);
-      updateDirtyUi(documentRef, existingPanel.querySelector('.viti-status'));
-      return;
+      initPositionVisibility(view);
+
+      built = buildPanel(documentRef, view);
+      insertPanel(documentRef, built.panel);
+
+      built.panel.setAttribute(SIGNATURE_ATTR, signature);
+
+      if (!state.snapshot) {
+        state.snapshot = takeSnapshot(view);
+      }
+
+      updateRowVisibility(view);
+      attachRowEnhancements(documentRef, view);
+      attachValueEnhancements(documentRef, view, built.statusNode);
+      hookScenarioSelect(documentRef, built.statusNode);
+      hookSaveLink(documentRef, built.statusNode);
+      updateDirtyUi(documentRef, built.statusNode);
+
+      fetchTrainingPlayerData().then(function (trainingData) {
+        applyTrainingAttributesToView(documentRef, view, trainingData);
+      });
+    } finally {
+      state.isEnhancing = false;
+      markEnhanceSuppress();
     }
-
-    cleanupIndividualEnhancements(documentRef);
-    ensureStyles(documentRef);
-    initPositionVisibility(view);
-
-    built = buildPanel(documentRef, view);
-    insertPanel(documentRef, built.panel);
-
-    built.panel.setAttribute(SIGNATURE_ATTR, signature);
-
-    if (!state.snapshot) {
-      state.snapshot = takeSnapshot(view);
-    }
-
-    updateRowVisibility(view);
-    attachRowEnhancements(documentRef, view);
-    attachValueEnhancements(documentRef, view, built.statusNode);
-    hookScenarioSelect(documentRef, built.statusNode);
-    hookSaveLink(documentRef, built.statusNode);
-    updateDirtyUi(documentRef, built.statusNode);
-
-    fetchTrainingPlayerData().then(function (trainingData) {
-      applyTrainingAttributesToView(documentRef, view, trainingData);
-    });
   }
 
   function start() {
