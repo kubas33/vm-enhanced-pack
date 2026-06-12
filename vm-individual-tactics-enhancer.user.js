@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Individual Tactics Enhancer
 // @namespace    https://vm-manager.org/
-// @version      0.2.1
+// @version      0.2.2
 // @description  Bulk edit, player selection, attribute chips, position presets and dirty-state tracking for VM Manager individual tactics view.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -1390,29 +1390,69 @@
     });
   }
 
-  function ensureStyles(documentRef) {
-    var style;
+  var PANEL_BG = '#1a2430';
+  var PANEL_BORDER = '#4a6078';
 
-    if (documentRef.getElementById(STYLE_ID)) {
-      return;
+  function ensureStyles(documentRef) {
+    var style = documentRef.getElementById(STYLE_ID);
+
+    if (!style) {
+      style = documentRef.createElement('style');
+      style.id = STYLE_ID;
+      documentRef.head.appendChild(style);
     }
 
-    style = documentRef.createElement('style');
-    style.id = STYLE_ID;
     style.textContent = [
       '#' + PANEL_ID + ' {',
-      '  margin: 0 0 4px;',
+      '  margin: 0;',
       '  padding: 8px 10px;',
-      '  border: 1px solid #4a6078;',
-      '  border-radius: 2px;',
-      '  background: #1a2430;',
+      '  border: 1px solid ' + PANEL_BORDER + ';',
+      '  border-bottom: none;',
+      '  border-radius: 0;',
+      '  background: ' + PANEL_BG + ';',
       '  color: #d8e2ec;',
       '  font: 12px/1.4 Tahoma, Verdana, sans-serif;',
       '  width: 100%;',
       '  box-sizing: border-box;',
       '}',
-      '.viti-panel-cell {',
-      '  padding: 0 0 2px !important;',
+      'tr.viti-panel-row td.viti-panel-cell {',
+      '  padding: 0 !important;',
+      '  background: ' + PANEL_BG + ' !important;',
+      '}',
+      'tr.viti-header-cap-row td,',
+      'tr.viti-header-cap-row td.fourth_top_left,',
+      'tr.viti-header-cap-row td.fourth_top_bottom,',
+      'tr.viti-header-cap-row td.fourth_top_right {',
+      '  height: 0 !important;',
+      '  padding: 0 !important;',
+      '  margin: 0 !important;',
+      '  line-height: 0 !important;',
+      '  font-size: 0 !important;',
+      '  background: ' + PANEL_BG + ' !important;',
+      '  background-image: none !important;',
+      '  border: none !important;',
+      '}',
+      'tr.viti-header-row td.fourth,',
+      'tr.viti-header-row td.fourth_left_right {',
+      '  background: ' + PANEL_BG + ' !important;',
+      '  background-image: none !important;',
+      '  border-color: ' + PANEL_BORDER + ' !important;',
+      '}',
+      'tr.viti-header-row font.center {',
+      '  color: #d8e2ec !important;',
+      '}',
+      'tr.viti-header-foot-row td,',
+      'tr.viti-header-foot-row td.fourth_bottom_left,',
+      'tr.viti-header-foot-row td.fourth_bottom_right,',
+      'tr.viti-header-foot-row td.fourth_top_bottom {',
+      '  height: 0 !important;',
+      '  padding: 0 !important;',
+      '  margin: 0 !important;',
+      '  line-height: 0 !important;',
+      '  font-size: 0 !important;',
+      '  background: ' + PANEL_BG + ' !important;',
+      '  background-image: none !important;',
+      '  border: none !important;',
       '}',
       '#' + PANEL_ID + ' .viti-row {',
       '  display: flex;',
@@ -1544,7 +1584,39 @@
       '  cursor: pointer;',
       '}'
     ].join('\n');
-    documentRef.head.appendChild(style);
+  }
+
+  function stylePanelHeaderIntegration(documentRef) {
+    var anchorRow = findColumnHeaderAnchor(documentRef);
+    var panelRow = documentRef.querySelector('tr.viti-panel-row');
+    var capRow;
+    var footRow;
+
+    if (!anchorRow) {
+      return;
+    }
+
+    anchorRow.classList.add('viti-header-row');
+
+    footRow = anchorRow.nextElementSibling;
+
+    if (footRow && footRow.tagName === 'TR') {
+      footRow.classList.add('viti-header-foot-row');
+    }
+
+    if (panelRow) {
+      capRow = panelRow.previousElementSibling;
+
+      if (capRow && capRow.tagName === 'TR') {
+        capRow.classList.add('viti-header-cap-row');
+      }
+    } else {
+      capRow = anchorRow.previousElementSibling;
+
+      if (capRow && capRow.tagName === 'TR' && !capRow.classList.contains('viti-panel-row')) {
+        capRow.classList.add('viti-header-cap-row');
+      }
+    }
   }
 
   function updateDirtyFieldMarkers(documentRef, snapshot) {
@@ -1794,10 +1866,12 @@
     panelTd.colSpan = 10;
     panelTd.className = 'viti-panel-cell';
     panelTd.appendChild(panel);
+    panelTr.className = 'viti-panel-row';
     panelTr.appendChild(panelTd);
 
     if (anchorRow && anchorRow.parentElement) {
       anchorRow.parentElement.insertBefore(panelTr, anchorRow);
+      stylePanelHeaderIntegration(documentRef);
       return;
     }
 
@@ -2031,6 +2105,9 @@
     });
 
     cleanupRowEnhancements(documentRef);
+    documentRef.querySelectorAll('.viti-header-row, .viti-header-cap-row, .viti-header-foot-row').forEach(function (row) {
+      row.classList.remove('viti-header-row', 'viti-header-cap-row', 'viti-header-foot-row');
+    });
 
     state.snapshot = null;
     state.scenarioSelect = null;
@@ -2062,6 +2139,8 @@
     existingPanel = documentRef.getElementById(PANEL_ID);
 
     if (existingPanel && existingPanel.getAttribute(SIGNATURE_ATTR) === signature) {
+      ensureStyles(documentRef);
+      stylePanelHeaderIntegration(documentRef);
       updateDirtyUi(documentRef, existingPanel.querySelector('.viti-status'));
       return;
     }
