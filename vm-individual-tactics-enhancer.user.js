@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Individual Tactics Enhancer
 // @namespace    https://vm-manager.org/
-// @version      0.2.6
+// @version      0.2.8
 // @description  Bulk edit, player selection, attribute chips, position presets and dirty-state tracking for VM Manager individual tactics view.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -1407,7 +1407,7 @@
 
   var PANEL_BG = '#1a2430';
   var PANEL_BORDER = '#4a6078';
-  var CARD_RADIUS = '3px';
+  var CARD_RADIUS = '4px';
 
   function ensureStyles(documentRef) {
     var style = documentRef.getElementById(STYLE_ID);
@@ -1419,6 +1419,14 @@
     }
 
     style.textContent = [
+      '.' + HOST_CLASS + ' {',
+      '  border: 1px solid ' + PANEL_BORDER + ';',
+      '  border-radius: ' + CARD_RADIUS + ';',
+      '  background: ' + PANEL_BG + ';',
+      '  padding: 0;',
+      '  overflow: hidden;',
+      '  vertical-align: top;',
+      '}',
       '#' + PANEL_ID + ' {',
       '  margin: 0;',
       '  padding: 8px 10px;',
@@ -1431,23 +1439,22 @@
       '  box-sizing: border-box;',
       '}',
       '#' + PANEL_ID + '.viti-panel-attached {',
-      '  border: 1px solid ' + PANEL_BORDER + ';',
+      '  border: none;',
       '  border-bottom: 1px solid ' + PANEL_BORDER + ';',
-      '  border-radius: ' + CARD_RADIUS + ' ' + CARD_RADIUS + ' 0 0;',
+      '  border-radius: 0;',
+      '  background: transparent;',
       '}',
       '.' + HOST_CLASS + ' table.viti-tactics-header-table {',
       '  width: 100%;',
       '  border-collapse: collapse;',
       '  margin: 0;',
-      '  border: 1px solid ' + PANEL_BORDER + ';',
-      '  border-top: none;',
-      '  border-radius: 0 0 ' + CARD_RADIUS + ' ' + CARD_RADIUS + ';',
-      '  overflow: hidden;',
+      '  border: none;',
       '}',
       'table.viti-tactics-header-table {',
       '  width: 100%;',
       '  border-collapse: collapse;',
       '  margin: 0;',
+      '  border: none;',
       '}',
       'table.viti-tactics-header-table tr.viti-header-decor-row {',
       '  display: none;',
@@ -1456,8 +1463,12 @@
       '  padding-top: 4px;',
       '  padding-bottom: 4px;',
       '}',
+      'table.viti-tactics-header-table tr.viti-header-row td.fourth_left_right {',
+      '  background: ' + PANEL_BG + ' !important;',
+      '  background-image: none !important;',
+      '  border: none !important;',
+      '}',
       'table.viti-tactics-header-table td.fourth,',
-      'table.viti-tactics-header-table td.fourth_left_right,',
       'table.viti-tactics-header-table td.fourth_top_left,',
       'table.viti-tactics-header-table td.fourth_top_bottom,',
       'table.viti-tactics-header-table td.fourth_top_right,',
