@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Individual Tactics Enhancer
 // @namespace    https://vm-manager.org/
-// @version      0.2.0
+// @version      0.2.1
 // @description  Bulk edit, player selection, attribute chips, position presets and dirty-state tracking for VM Manager individual tactics view.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -62,40 +62,6 @@
   var ATTRIBUTE_CODES = positionRules.ATTRIBUTE_CODES;
 
   var TACTICS_ATTR_CHIPS = {
-    attack: {
-      At: [
-        { label: 'Atak ze skrzydła', short: 'Skr' },
-        { label: 'Atak z 2 linii', short: '2L' },
-        { label: 'Omijanie bloku', short: 'Om' },
-        { label: 'Kiwka', short: 'Kiw' }
-      ],
-      P: [
-        { label: 'Atak ze skrzydła', short: 'Skr' },
-        { label: 'Atak z 2 linii', short: '2L' },
-        { label: 'Omijanie bloku', short: 'Om' },
-        { label: 'Kiwka', short: 'Kiw' }
-      ],
-      Śr: [
-        { label: 'Atak ze środka', short: 'Śrd' },
-        { label: 'Omijanie bloku', short: 'Om' },
-        { label: 'Kiwka', short: 'Kiw' }
-      ],
-      Sr: [
-        { label: 'Atak ze środka', short: 'Śrd' },
-        { label: 'Omijanie bloku', short: 'Om' },
-        { label: 'Kiwka', short: 'Kiw' }
-      ],
-      R: [
-        { label: 'Atak ze skrzydła', short: 'Skr' },
-        { label: 'Atak z 2 linii', short: '2L' },
-        { label: 'Kiwka', short: 'Kiw' }
-      ],
-      L: [
-        { label: 'Atak ze skrzydła', short: 'Skr' },
-        { label: 'Atak z 2 linii', short: '2L' },
-        { label: 'Kiwka', short: 'Kiw' }
-      ]
-    },
     defense: {
       default: [
         { label: 'Obrona', short: 'Obr' },
@@ -128,7 +94,7 @@
     serve: 'Cel serwisu: 1. P (8/1/1), 2. P (1/8/1), libero (1/1/8). Siła bez zmian.'
   };
 
-  var POSITION_FILTERS = ['', 'At', 'P', 'R', 'Śr', 'L'];
+  var POSITION_OPTIONS = ['At', 'P', 'R', 'Śr', 'L'];
 
   var ATTACK_PRESETS = {
     At: { atak: 8, kiwka: 1, out: 1 },
@@ -160,12 +126,14 @@
 
   var state = {
     snapshot: null,
-    activePositionFilter: '',
+    positionVisibility: {},
+    positionVisibilityScenario: '',
     selectedPlayerIds: {},
     scenarioSelect: null,
     scenarioPreviousIndex: 0,
     holdTimer: null,
-    updateSelectionUi: null
+    updateSelectionUi: null,
+    updatePositionFilterUi: null
   };
 
   function normalizeText(value) {
@@ -682,10 +650,11 @@
     return nodes.length ? nodes[0] : null;
   }
 
-  function setSpanValue(documentRef, spanId, targetValue, bounds) {
-    var span = getSpanById(documentRef, spanId);
-    var min = bounds.min;
-    var max = bounds.max;
+  function setSpanValue(documentRef, spanId, targetValue, bounds, preferredSpan) {
+    var span = preferredSpan || getSpanById(documentRef, spanId);
+    var safeBounds = bounds || { min: 1, max: 8 };
+    var min = safeBounds.min;
+    var max = safeBounds.max;
     var current;
     var next;
 
@@ -710,21 +679,82 @@
         root.spanValueMinus(spanId, min);
         current -= 1;
       }
+
+      if (readSpanValue(span) !== next) {
+        span.textContent = String(next);
+      }
+
       return;
     }
 
     span.textContent = String(next);
   }
 
-  function getFilteredRows(view, positionFilter) {
-    if (!positionFilter) {
-      return view.rows;
+  function refreshRowFieldFromDom(documentRef, cell) {
+    var span = getSpanById(documentRef, cell.spanId);
+
+    if (!span) {
+      return;
     }
 
+    cell.span = span;
+    cell.bounds = readSpanBounds(span);
+  }
+
+  function normalizePositionKey(positionShort) {
+    return positionShort === 'Sr' ? 'Śr' : positionShort;
+  }
+
+  function isAttackLine2(view) {
+    return /2l/i.test(String(view.scenarioOpt || ''));
+  }
+
+  function getDefaultPositionVisibility(view) {
+    var visibility = {
+      At: true,
+      P: true,
+      R: true,
+      Śr: true,
+      L: true
+    };
+
+    if (getViewType(view) === 'attack') {
+      visibility.R = false;
+      visibility.L = false;
+
+      if (isAttackLine2(view)) {
+        visibility.Śr = false;
+      }
+    }
+
+    return visibility;
+  }
+
+  function initPositionVisibility(view) {
+    if (state.positionVisibilityScenario !== view.scenarioOpt) {
+      state.positionVisibility = getDefaultPositionVisibility(view);
+      state.positionVisibilityScenario = view.scenarioOpt;
+    }
+  }
+
+  function isPositionVisible(positionShort) {
+    var key = normalizePositionKey(positionShort);
+
+    if (!state.positionVisibility || state.positionVisibility[key] === undefined) {
+      return true;
+    }
+
+    return Boolean(state.positionVisibility[key]);
+  }
+
+  function getVisibleRows(view) {
     return view.rows.filter(function (row) {
-      return row.positionShort === positionFilter ||
-        (positionFilter === 'Śr' && row.positionShort === 'Sr');
+      return isPositionVisible(row.positionShort);
     });
+  }
+
+  function getFilteredRows(view) {
+    return getVisibleRows(view);
   }
 
   function getSelectedRows(view) {
@@ -740,7 +770,7 @@
       return selected;
     }
 
-    return getFilteredRows(view, state.activePositionFilter);
+    return getVisibleRows(view);
   }
 
   function countSelectedPlayers() {
@@ -772,7 +802,9 @@
     }
   }
 
-  function selectVisiblePlayers(documentRef, view) {
+  function selectVisiblePlayers(documentRef) {
+    var view = parseIndividualView(documentRef);
+
     view.rows.forEach(function (row) {
       if (!row.container || row.container.style.display === 'none') {
         return;
@@ -782,6 +814,14 @@
     });
 
     syncCheckboxUi(documentRef);
+  }
+
+  function applyBulkFieldValue(documentRef, statusNode, columnField, value) {
+    var view = parseIndividualView(documentRef);
+    var rows = getBulkTargetRows(view);
+
+    applyFieldValue(documentRef, rows, columnField, value);
+    updateDirtyUi(documentRef, statusNode);
   }
 
   function syncCheckboxUi(documentRef) {
@@ -940,9 +980,42 @@
     return 'viti-grade-elite';
   }
 
+  function getAttackAttrChips(positionShort, line2) {
+    var middle = [
+      { label: 'Atak ze środka', short: 'Śrd' },
+      { label: 'Omijanie bloku', short: 'Om' },
+      { label: 'Kiwka', short: 'Kiw' }
+    ];
+    var wingLine = [
+      { label: 'Atak ze skrzydła', short: 'Skr' },
+      { label: 'Omijanie bloku', short: 'Om' },
+      { label: 'Kiwka', short: 'Kiw' }
+    ];
+    var secondLine = [
+      { label: 'Atak z 2 linii', short: '2L' },
+      { label: 'Omijanie bloku', short: 'Om' },
+      { label: 'Kiwka', short: 'Kiw' }
+    ];
+    var pos = normalizePositionKey(positionShort);
+
+    if (pos === 'Śr') {
+      return middle;
+    }
+
+    if (line2) {
+      return secondLine;
+    }
+
+    return wingLine;
+  }
+
   function getAttrChipsForRow(view, row) {
     var viewType = getViewType(view);
     var typeMap = TACTICS_ATTR_CHIPS[viewType];
+
+    if (viewType === 'attack') {
+      return getAttackAttrChips(row.positionShort, isAttackLine2(view));
+    }
 
     if (!typeMap) {
       return [];
@@ -1081,7 +1154,8 @@
         return;
       }
 
-      setSpanValue(documentRef, cell.spanId, value, cell.bounds);
+      refreshRowFieldFromDom(documentRef, cell);
+      setSpanValue(documentRef, cell.spanId, value, cell.bounds, cell.span);
     });
   }
 
@@ -1106,7 +1180,8 @@
         return;
       }
 
-      setSpanValue(documentRef, cell.spanId, preset[presetField], cell.bounds);
+      refreshRowFieldFromDom(documentRef, cell);
+      setSpanValue(documentRef, cell.spanId, preset[presetField], cell.bounds, cell.span);
     });
   }
 
@@ -1250,7 +1325,7 @@
         label: 'At/P',
         title: 'Atakujący i przyjmujący: 8/1/1',
         apply: function () {
-          getFilteredRows(view, state.activePositionFilter)
+          getVisibleRows(view)
             .filter(function (row) { return row.positionShort === 'At' || row.positionShort === 'P'; })
             .forEach(function (row) {
               applyPresetToRow(documentRef, row, presetMap[row.positionShort] || presetMap.At);
@@ -1262,7 +1337,7 @@
         label: 'Śr',
         title: 'Środkowi: 8/3/1',
         apply: function () {
-          getFilteredRows(view, state.activePositionFilter)
+          getVisibleRows(view)
             .filter(function (row) { return row.positionShort === 'Śr' || row.positionShort === 'Sr'; })
             .forEach(function (row) {
               applyPresetToRow(documentRef, row, presetMap.Śr);
@@ -1274,7 +1349,7 @@
         label: 'R/L',
         title: 'Rozgrywający i libero: 1/1/1',
         apply: function () {
-          getFilteredRows(view, state.activePositionFilter)
+          getVisibleRows(view)
             .filter(function (row) { return row.positionShort === 'R' || row.positionShort === 'L'; })
             .forEach(function (row) {
               applyPresetToRow(documentRef, row, presetMap[row.positionShort] || presetMap.R);
@@ -1286,28 +1361,32 @@
         label: 'Wszystkie pozycje',
         title: 'Zastosuj presety pozycyjne do całej drużyny',
         apply: function () {
-          applyPositionPresets(documentRef, { rows: getFilteredRows(view, state.activePositionFilter) }, presetMap);
+          applyPositionPresets(documentRef, { rows: getVisibleRows(view) }, presetMap);
           updateDirtyUi(documentRef, statusNode);
         }
       }
     ];
   }
 
-  function updateRowVisibility(view, positionFilter) {
+  function updateRowVisibility(view) {
     view.rows.forEach(function (row) {
       if (!row.container) {
         return;
       }
 
-      if (!positionFilter) {
-        row.container.style.display = '';
+      row.container.style.display = isPositionVisible(row.positionShort) ? '' : 'none';
+    });
+  }
+
+  function syncPositionFilterUi(documentRef) {
+    dom.queryVisibleAll(documentRef, '.viti-position-filter').forEach(function (checkbox) {
+      var position = checkbox.getAttribute('data-viti-position');
+
+      if (!position) {
         return;
       }
 
-      row.container.style.display = (
-        row.positionShort === positionFilter ||
-        (positionFilter === 'Śr' && row.positionShort === 'Sr')
-      ) ? '' : 'none';
+      checkbox.checked = isPositionVisible(position);
     });
   }
 
@@ -1443,15 +1522,78 @@
       '.viti-grade-solid { color: #ffd45c !important; }',
       '.viti-grade-good { color: #73d87a !important; }',
       '.viti-grade-very-good { color: #4bd6d6 !important; }',
-      '.viti-grade-elite { color: #ff76d6 !important; }'
+      '.viti-grade-elite { color: #ff76d6 !important; }',
+      '.viti-dirty-value {',
+      '  color: #ffb347 !important;',
+      '  font-weight: bold;',
+      '}',
+      '.viti-dirty-cell {',
+      '  box-shadow: inset 0 0 0 1px #ffb347;',
+      '}',
+      '#' + PANEL_ID + ' .viti-position-filters {',
+      '  display: flex;',
+      '  flex-wrap: wrap;',
+      '  gap: 10px;',
+      '  align-items: center;',
+      '}',
+      '#' + PANEL_ID + ' .viti-position-filter-label {',
+      '  display: inline-flex;',
+      '  align-items: center;',
+      '  gap: 4px;',
+      '  color: #d8e2ec;',
+      '  cursor: pointer;',
+      '}'
     ].join('\n');
     documentRef.head.appendChild(style);
+  }
+
+  function updateDirtyFieldMarkers(documentRef, snapshot) {
+    documentRef.querySelectorAll('.viti-dirty-value').forEach(function (node) {
+      node.classList.remove('viti-dirty-value');
+      node.removeAttribute('title');
+    });
+
+    documentRef.querySelectorAll('.viti-dirty-cell').forEach(function (node) {
+      node.classList.remove('viti-dirty-cell');
+    });
+
+    if (!snapshot) {
+      return;
+    }
+
+    Object.keys(snapshot).forEach(function (spanId) {
+      var span = getSpanById(documentRef, spanId);
+      var cell;
+      var savedValue;
+      var currentValue;
+
+      if (!span) {
+        return;
+      }
+
+      savedValue = snapshot[spanId];
+      currentValue = readSpanValue(span);
+
+      if (currentValue === savedValue) {
+        return;
+      }
+
+      span.classList.add('viti-dirty-value');
+      span.title = 'Niezapisane: ' + savedValue + ' → ' + currentValue;
+      cell = span.closest('td');
+
+      if (cell) {
+        cell.classList.add('viti-dirty-cell');
+      }
+    });
   }
 
   function updateDirtyUi(documentRef, statusNode) {
     var dirtyCount = countDirtyChanges(documentRef, state.snapshot);
     var saveLink = findSaveLink(documentRef);
     var panelSaveButton = documentRef.querySelector('#' + PANEL_ID + ' .viti-save-btn');
+
+    updateDirtyFieldMarkers(documentRef, state.snapshot);
 
     if (statusNode) {
       if (dirtyCount) {
@@ -1669,7 +1811,7 @@
     var bulkRow = documentRef.createElement('div');
     var presetRow = documentRef.createElement('div');
     var statusRow = documentRef.createElement('div');
-    var positionSelect = documentRef.createElement('select');
+    var positionFilters = documentRef.createElement('div');
     var columnSelect = documentRef.createElement('select');
     var valueInput = documentRef.createElement('input');
     var statusNode = documentRef.createElement('span');
@@ -1684,7 +1826,7 @@
       if (selectedCount) {
         bulkHintNode.textContent = 'Zastosuj trafi do ' + selectedCount + ' zaznaczonych zawodników.';
       } else {
-        bulkHintNode.textContent = 'Bez zaznaczenia: stosuj do filtra pozycji.';
+        bulkHintNode.textContent = 'Bez zaznaczenia: stosuj do widocznych pozycji.';
       }
     }
 
@@ -1694,13 +1836,6 @@
     }
 
     panel.id = PANEL_ID;
-
-    POSITION_FILTERS.forEach(function (value) {
-      var option = documentRef.createElement('option');
-      option.value = value;
-      option.textContent = value || 'Wszyscy';
-      positionSelect.appendChild(option);
-    });
 
     view.columns.forEach(function (column) {
       var option = documentRef.createElement('option');
@@ -1716,10 +1851,37 @@
     valueInput.style.width = '52px';
 
     filterRow.className = 'viti-row';
-    filterRow.appendChild(documentRef.createElement('label')).textContent = 'Filtr pozycji:';
-    filterRow.lastChild.setAttribute('for', 'viti-position-filter');
-    positionSelect.id = 'viti-position-filter';
-    filterRow.appendChild(positionSelect);
+    filterRow.appendChild(documentRef.createElement('label')).textContent = 'Pozycje:';
+    positionFilters.className = 'viti-position-filters';
+
+    POSITION_OPTIONS.forEach(function (position) {
+      var positionLabel = documentRef.createElement('label');
+      var positionCheckbox = documentRef.createElement('input');
+
+      positionLabel.className = 'viti-position-filter-label';
+      positionCheckbox.type = 'checkbox';
+      positionCheckbox.className = 'viti-position-filter';
+      positionCheckbox.setAttribute('data-viti-position', position);
+      positionCheckbox.checked = isPositionVisible(position);
+      positionCheckbox.addEventListener('change', function () {
+        state.positionVisibility[position] = positionCheckbox.checked;
+
+        if (!POSITION_OPTIONS.some(function (pos) {
+          return state.positionVisibility[pos];
+        })) {
+          state.positionVisibility[position] = true;
+          positionCheckbox.checked = true;
+        }
+
+        updateRowVisibility(parseIndividualView(documentRef));
+      });
+
+      positionLabel.appendChild(positionCheckbox);
+      positionLabel.appendChild(documentRef.createTextNode(position));
+      positionFilters.appendChild(positionLabel);
+    });
+
+    filterRow.appendChild(positionFilters);
 
     selectionRow.className = 'viti-row';
     selectionCountNode.className = 'viti-selection-count';
@@ -1731,7 +1893,7 @@
       button.textContent = label;
       button.addEventListener('click', function () {
         if (label === 'Zaznacz widocznych') {
-          selectVisiblePlayers(documentRef, view);
+          selectVisiblePlayers(documentRef);
         } else {
           clearPlayerSelection(documentRef);
         }
@@ -1749,13 +1911,7 @@
       button.type = 'button';
       button.textContent = presetValue;
       button.addEventListener('click', function () {
-        applyFieldValue(
-          documentRef,
-          getBulkTargetRows(view),
-          columnSelect.value,
-          presetValue
-        );
-        updateDirtyUi(documentRef, statusNode);
+        applyBulkFieldValue(documentRef, statusNode, columnSelect.value, presetValue);
       });
       bulkRow.appendChild(button);
     });
@@ -1766,13 +1922,7 @@
     applyButton.type = 'button';
     applyButton.textContent = 'Zastosuj';
     applyButton.addEventListener('click', function () {
-      applyFieldValue(
-        documentRef,
-        getBulkTargetRows(view),
-        columnSelect.value,
-        valueInput.value
-      );
-      updateDirtyUi(documentRef, statusNode);
+      applyBulkFieldValue(documentRef, statusNode, columnSelect.value, valueInput.value);
     });
     bulkRow.appendChild(applyButton);
 
@@ -1838,14 +1988,12 @@
     statusRow.appendChild(saveButton);
     panel.appendChild(statusRow);
 
-    positionSelect.value = state.activePositionFilter;
-    positionSelect.addEventListener('change', function () {
-      state.activePositionFilter = positionSelect.value;
-      updateRowVisibility(view, state.activePositionFilter);
-    });
-
     state.updateSelectionUi = refreshSelectionUi;
+    state.updatePositionFilterUi = function () {
+      syncPositionFilterUi(documentRef);
+    };
     refreshSelectionUi();
+    syncPositionFilterUi(documentRef);
 
     return {
       panel: panel,
@@ -1887,7 +2035,10 @@
     state.snapshot = null;
     state.scenarioSelect = null;
     state.selectedPlayerIds = {};
+    state.positionVisibility = {};
+    state.positionVisibilityScenario = '';
     state.updateSelectionUi = null;
+    state.updatePositionFilterUi = null;
   }
 
   function enhanceIndividualTactics(documentRef) {
@@ -1917,6 +2068,7 @@
 
     cleanupIndividualEnhancements(documentRef);
     ensureStyles(documentRef);
+    initPositionVisibility(view);
 
     built = buildPanel(documentRef, view);
     insertPanel(documentRef, built.panel);
@@ -1927,7 +2079,7 @@
       state.snapshot = takeSnapshot(view);
     }
 
-    updateRowVisibility(view, state.activePositionFilter);
+    updateRowVisibility(view);
     attachRowEnhancements(documentRef, view);
     attachValueEnhancements(documentRef, view, built.statusNode);
     hookScenarioSelect(documentRef, built.statusNode);
