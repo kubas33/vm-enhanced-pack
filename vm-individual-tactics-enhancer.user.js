@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Individual Tactics Enhancer
 // @namespace    https://vm-manager.org/
-// @version      0.1.2
+// @version      0.1.3
 // @description  Bulk edit, position presets and dirty-state tracking for VM Manager individual tactics view.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -193,7 +193,9 @@
     var seen = {};
     var result = [];
 
-    dom.queryVisibleAll(documentRef, 'span[id]').forEach(function (span) {
+    // Używamy querySelectorAll zamiast queryVisibleAll — filtr pozycji ukrywa
+    // wiersze przez display:none, a parser musi widzieć całą drużynę.
+    Array.prototype.slice.call(documentRef.querySelectorAll('span[id]')).forEach(function (span) {
       var parsed;
 
       if (!isTacticsValueSpan(span)) {
