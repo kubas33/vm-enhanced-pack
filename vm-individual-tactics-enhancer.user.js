@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Individual Tactics Enhancer
 // @namespace    https://vm-manager.org/
-// @version      0.2.2
+// @version      0.2.4
 // @description  Bulk edit, player selection, attribute chips, position presets and dirty-state tracking for VM Manager individual tactics view.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -51,6 +51,7 @@
 
   var STYLE_ID = 'viti-style';
   var PANEL_ID = 'viti-bulk-panel';
+  var CARD_CLASS = 'viti-tactics-card';
   var SIGNATURE_ATTR = 'data-viti-signature';
   var ENHANCED_ATTR = 'data-viti-enhanced';
   var ROW_ENHANCED_ATTR = 'data-viti-row-enhanced';
@@ -1392,6 +1393,7 @@
 
   var PANEL_BG = '#1a2430';
   var PANEL_BORDER = '#4a6078';
+  var CARD_RADIUS = '3px';
 
   function ensureStyles(documentRef) {
     var style = documentRef.getElementById(STYLE_ID);
@@ -1403,56 +1405,60 @@
     }
 
     style.textContent = [
+      '.' + CARD_CLASS + ' {',
+      '  margin: 0;',
+      '  width: 100%;',
+      '  box-sizing: border-box;',
+      '  border: 1px solid ' + PANEL_BORDER + ';',
+      '  border-radius: ' + CARD_RADIUS + ';',
+      '  background: ' + PANEL_BG + ';',
+      '  overflow: hidden;',
+      '}',
       '#' + PANEL_ID + ' {',
       '  margin: 0;',
       '  padding: 8px 10px;',
       '  border: 1px solid ' + PANEL_BORDER + ';',
-      '  border-bottom: none;',
-      '  border-radius: 0;',
+      '  border-radius: ' + CARD_RADIUS + ';',
       '  background: ' + PANEL_BG + ';',
       '  color: #d8e2ec;',
       '  font: 12px/1.4 Tahoma, Verdana, sans-serif;',
       '  width: 100%;',
       '  box-sizing: border-box;',
       '}',
-      'tr.viti-panel-row td.viti-panel-cell {',
-      '  padding: 0 !important;',
-      '  background: ' + PANEL_BG + ' !important;',
+      '#' + PANEL_ID + '.viti-panel-attached {',
+      '  border: none;',
+      '  border-radius: 0;',
+      '  border-bottom: 1px solid ' + PANEL_BORDER + ';',
       '}',
-      'tr.viti-header-cap-row td,',
-      'tr.viti-header-cap-row td.fourth_top_left,',
-      'tr.viti-header-cap-row td.fourth_top_bottom,',
-      'tr.viti-header-cap-row td.fourth_top_right {',
-      '  height: 0 !important;',
-      '  padding: 0 !important;',
-      '  margin: 0 !important;',
-      '  line-height: 0 !important;',
-      '  font-size: 0 !important;',
-      '  background: ' + PANEL_BG + ' !important;',
-      '  background-image: none !important;',
-      '  border: none !important;',
+      'table.viti-tactics-header-table {',
+      '  width: 100%;',
+      '  border-collapse: collapse;',
+      '  margin: 0;',
+      '  border: none;',
       '}',
-      'tr.viti-header-row td.fourth,',
-      'tr.viti-header-row td.fourth_left_right {',
+      'table.viti-tactics-header-table tr.viti-header-decor-row {',
+      '  display: none;',
+      '}',
+      'table.viti-tactics-header-table tr.viti-header-row td.fourth {',
+      '  padding-top: 4px;',
+      '  padding-bottom: 4px;',
+      '}',
+      'table.viti-tactics-header-table td.fourth,',
+      'table.viti-tactics-header-table td.fourth_left_right,',
+      'table.viti-tactics-header-table td.fourth_top_left,',
+      'table.viti-tactics-header-table td.fourth_top_bottom,',
+      'table.viti-tactics-header-table td.fourth_top_right,',
+      'table.viti-tactics-header-table td.fourth_bottom_left,',
+      'table.viti-tactics-header-table td.fourth_bottom_right {',
       '  background: ' + PANEL_BG + ' !important;',
       '  background-image: none !important;',
       '  border-color: ' + PANEL_BORDER + ' !important;',
       '}',
-      'tr.viti-header-row font.center {',
+      'table.viti-tactics-header-table font.center {',
       '  color: #d8e2ec !important;',
       '}',
-      'tr.viti-header-foot-row td,',
-      'tr.viti-header-foot-row td.fourth_bottom_left,',
-      'tr.viti-header-foot-row td.fourth_bottom_right,',
-      'tr.viti-header-foot-row td.fourth_top_bottom {',
-      '  height: 0 !important;',
-      '  padding: 0 !important;',
-      '  margin: 0 !important;',
-      '  line-height: 0 !important;',
-      '  font-size: 0 !important;',
-      '  background: ' + PANEL_BG + ' !important;',
-      '  background-image: none !important;',
-      '  border: none !important;',
+      'tr.viti-tactics-spacer {',
+      '  display: none;',
       '}',
       '#' + PANEL_ID + ' .viti-row {',
       '  display: flex;',
@@ -1586,37 +1592,125 @@
     ].join('\n');
   }
 
-  function stylePanelHeaderIntegration(documentRef) {
+  function findTacticsHeaderTable(documentRef) {
     var anchorRow = findColumnHeaderAnchor(documentRef);
-    var panelRow = documentRef.querySelector('tr.viti-panel-row');
-    var capRow;
-    var footRow;
+    var table;
 
     if (!anchorRow) {
+      return null;
+    }
+
+    table = anchorRow.closest('table');
+
+    while (table) {
+      if (table.querySelector('td.fourth_top_left, td.fourth_top_bottom, td.fourth_top_right')) {
+        return table;
+      }
+
+      table = table.parentElement ? table.parentElement.closest('table') : null;
+    }
+
+    return anchorRow.closest('table');
+  }
+
+  function findTacticsBlockRow(documentRef) {
+    var headerTable = findTacticsHeaderTable(documentRef);
+    var node = headerTable;
+
+    if (!node) {
+      return null;
+    }
+
+    while (node && node.nodeType === 1) {
+      if (node.tagName === 'TABLE' && node.getAttribute('width') === '916') {
+        break;
+      }
+
+      node = node.parentElement;
+    }
+
+    while (node && node.tagName !== 'TR') {
+      node = node.parentElement;
+    }
+
+    return node;
+  }
+
+  function tightenTacticsSpacing(documentRef) {
+    var blockRow = findTacticsBlockRow(documentRef);
+    var prev;
+
+    if (!blockRow) {
       return;
     }
 
-    anchorRow.classList.add('viti-header-row');
+    prev = blockRow.previousElementSibling;
 
-    footRow = anchorRow.nextElementSibling;
+    if (prev && prev.tagName === 'TR') {
+      prev.classList.add('viti-tactics-spacer');
+    }
+  }
 
-    if (footRow && footRow.tagName === 'TR') {
-      footRow.classList.add('viti-header-foot-row');
+  function stylePanelHeaderIntegration(documentRef, headerTable) {
+    var anchorRow = findColumnHeaderAnchor(documentRef);
+    var table = headerTable || findTacticsHeaderTable(documentRef);
+
+    if (!table) {
+      return;
     }
 
-    if (panelRow) {
-      capRow = panelRow.previousElementSibling;
+    table.classList.add('viti-tactics-header-table');
 
-      if (capRow && capRow.tagName === 'TR') {
-        capRow.classList.add('viti-header-cap-row');
-      }
-    } else {
-      capRow = anchorRow.previousElementSibling;
-
-      if (capRow && capRow.tagName === 'TR' && !capRow.classList.contains('viti-panel-row')) {
-        capRow.classList.add('viti-header-cap-row');
-      }
+    if (anchorRow) {
+      anchorRow.classList.add('viti-header-row');
     }
+
+    table.querySelectorAll('td.fourth_top_left, td.fourth_bottom_left').forEach(function (cell) {
+      var decorRow = cell.closest('tr');
+
+      if (decorRow) {
+        decorRow.classList.add('viti-header-decor-row');
+      }
+    });
+  }
+
+  function cleanupPanelHeaderIntegration(documentRef) {
+    documentRef.querySelectorAll('.viti-tactics-header-table').forEach(function (table) {
+      table.classList.remove('viti-tactics-header-table');
+    });
+
+    documentRef.querySelectorAll('.viti-header-row, .viti-header-decor-row').forEach(function (row) {
+      row.classList.remove('viti-header-row', 'viti-header-decor-row');
+    });
+
+    documentRef.querySelectorAll('.viti-tactics-spacer').forEach(function (row) {
+      row.classList.remove('viti-tactics-spacer');
+    });
+  }
+
+  function unwrapTacticsCard(documentRef) {
+    var card = documentRef.querySelector('.' + CARD_CLASS);
+    var headerTable;
+    var panel;
+    var host;
+
+    if (!card) {
+      return;
+    }
+
+    host = card.parentElement;
+    headerTable = card.querySelector('table.viti-tactics-header-table') || card.querySelector('table');
+    panel = card.querySelector('#' + PANEL_ID);
+
+    if (headerTable && host) {
+      host.insertBefore(headerTable, card);
+    }
+
+    if (panel) {
+      panel.classList.remove('viti-panel-attached');
+    }
+
+    card.remove();
   }
 
   function updateDirtyFieldMarkers(documentRef, snapshot) {
@@ -1859,19 +1953,19 @@
   }
 
   function insertPanel(documentRef, panel) {
-    var anchorRow = findColumnHeaderAnchor(documentRef);
-    var panelTr = documentRef.createElement('tr');
-    var panelTd = documentRef.createElement('td');
+    var headerTable = findTacticsHeaderTable(documentRef);
+    var host = headerTable ? headerTable.parentElement : null;
+    var card;
 
-    panelTd.colSpan = 10;
-    panelTd.className = 'viti-panel-cell';
-    panelTd.appendChild(panel);
-    panelTr.className = 'viti-panel-row';
-    panelTr.appendChild(panelTd);
-
-    if (anchorRow && anchorRow.parentElement) {
-      anchorRow.parentElement.insertBefore(panelTr, anchorRow);
-      stylePanelHeaderIntegration(documentRef);
+    if (host && headerTable) {
+      card = documentRef.createElement('div');
+      card.className = CARD_CLASS;
+      host.insertBefore(card, headerTable);
+      panel.classList.add('viti-panel-attached');
+      card.appendChild(panel);
+      card.appendChild(headerTable);
+      stylePanelHeaderIntegration(documentRef, headerTable);
+      tightenTacticsSpacing(documentRef);
       return;
     }
 
@@ -2088,26 +2182,14 @@
   }
 
   function cleanupIndividualEnhancements(documentRef) {
-    var panel = documentRef.getElementById(PANEL_ID);
-    var wrapperTr;
-
-    if (panel) {
-      wrapperTr = panel.closest('tr');
-      panel.remove();
-
-      if (wrapperTr && !normalizeText(wrapperTr.textContent)) {
-        wrapperTr.remove();
-      }
-    }
+    unwrapTacticsCard(documentRef);
 
     dom.queryVisibleAll(documentRef, '.viti-save-dirty').forEach(function (node) {
       node.classList.remove('viti-save-dirty');
     });
 
     cleanupRowEnhancements(documentRef);
-    documentRef.querySelectorAll('.viti-header-row, .viti-header-cap-row, .viti-header-foot-row').forEach(function (row) {
-      row.classList.remove('viti-header-row', 'viti-header-cap-row', 'viti-header-foot-row');
-    });
+    cleanupPanelHeaderIntegration(documentRef);
 
     state.snapshot = null;
     state.scenarioSelect = null;
@@ -2140,7 +2222,8 @@
 
     if (existingPanel && existingPanel.getAttribute(SIGNATURE_ATTR) === signature) {
       ensureStyles(documentRef);
-      stylePanelHeaderIntegration(documentRef);
+      stylePanelHeaderIntegration(documentRef, findTacticsHeaderTable(documentRef));
+      tightenTacticsSpacing(documentRef);
       updateDirtyUi(documentRef, existingPanel.querySelector('.viti-status'));
       return;
     }
