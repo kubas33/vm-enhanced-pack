@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Training History Exporter
 // @namespace    https://vm-manager.org/
-// @version      0.1.2
+// @version      0.1.3
 // @description  Saves senior training before/after snapshots locally and exports training history as JSON/CSV.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -70,7 +70,13 @@
 
   function parseCurrentSnapshot() {
     var form = getTrainingForm();
-    return form ? parser.parseSeniorTrainingSnapshotFromHtml(form.outerHTML || form.innerHTML || '') : null;
+    if (!form) {
+      return null;
+    }
+    if (typeof parser.parseSeniorTrainingSnapshotFromRoot === 'function') {
+      return parser.parseSeniorTrainingSnapshotFromRoot(form);
+    }
+    return parser.parseSeniorTrainingSnapshotFromHtml(form.outerHTML || form.innerHTML || '');
   }
 
   function openDb() {

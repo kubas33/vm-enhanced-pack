@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Training History Parser
 // @namespace    https://vm-manager.org/
-// @version      0.1.1
+// @version      0.1.2
 // @description  Parses senior training snapshots, coaches, infrastructure and training efficiency context.
 // @grant        none
 // @run-at       document-start
@@ -345,6 +345,126 @@
       pool: parsePoolFromHtml(source),
       players: players,
     };
+  }
+
+  function parseSeniorTrainingSnapshotFromRoot(root) {
+    var scope = root && root.querySelectorAll ? root : null;
+    var select;
+    var selectedTrainingCode;
+    var skillOptions = {};
+    var players = [];
+    var seen = {};
+    var inputs;
+    var pool;
+
+    if (!scope) {
+      return null;
+    }
+
+    select = scope.querySelector('#' + SENIOR_SELECT_ID);
+    selectedTrainingCode = select ? select.value : parseSelectedTrainingCode(scope.innerHTML || '');
+
+    if (select) {
+      Array.prototype.slice.call(select.options || []).forEach(function (option) {
+        skillOptions[option.value] = normalizeText(option.textContent || option.innerText || '');
+      });
+    } else {
+      skillOptions = parseSkillOptionsFromHtml(scope.innerHTML || '');
+    }
+
+    inputs = Array.prototype.slice.call(scope.querySelectorAll('input[type="radio"][name^="' + SENIOR_INPUT_PREFIX + '"]'));
+    inputs.forEach(function (input) {
+      var playerId = parsePlayerIdFromInputName(input.name);
+      var row;
+      var player;
+
+      if (!playerId || seen[playerId]) {
+        return;
+      }
+
+      row = input.closest ? input.closest('tr') : null;
+      if (!row) {
+        return;
+      }
+
+      player = parsePlayerFromRowElement(row, playerId, selectedTrainingCode, skillOptions);
+      if (player) {
+        seen[playerId] = true;
+        players.push(player);
+      }
+    });
+
+    pool = parsePoolFromText(scope.textContent || '');
+
+    return {
+      formId: SENIOR_FORM_ID,
+      selectedTrainingCode: selectedTrainingCode,
+      selectedTrainingLabel: SKILL_LABELS[selectedTrainingCode] || skillOptions[selectedTrainingCode] || selectedTrainingCode,
+      pool: pool,
+      players: players,
+    };
+  }
+
+  function parsePlayerIdFromInputName(name) {
+    var match = String(name || '').match(new RegExp('^' + SENIOR_INPUT_PREFIX + '(\\d+)$'));
+    return match ? match[1] : '';
+  }
+
+  function parsePoolFromText(text) {
+    var match = String(text || '').match(/Punkty treningowe:\s*(\d+)\s*\/\s*(\d+)/i);
+    if (!match) {
+      return null;
+    }
+    return {
+      current: Number(match[1]),
+      max: Number(match[2]),
+    };
+  }
+
+  function parsePlayerFromRowElement(row, playerId, selectedTrainingCode, skillOptions) {
+    var source = row.outerHTML || '';
+    var base = parsePlayerFromRowHtml(source, selectedTrainingCode, skillOptions);
+    var selectedInput = row.querySelector('input[type="radio"][name="' + SENIOR_INPUT_PREFIX + playerId + '"]:checked');
+    var selectedOption;
+    var meta;
+    var trainedSkillCode;
+
+    if (!base) {
+      return null;
+    }
+
+    selectedOption = selectedInput ? selectedInput.value : base.selectedOption;
+    meta = TRAINING_OPTION_META[selectedOption] || { cost: 0 };
+    trainedSkillCode = selectedOption === 'wybrany' ? selectedTrainingCode : (meta.skillCode || '');
+
+    base.selectedOption = selectedOption;
+    base.trainingCost = meta.cost || 0;
+    base.trainedSkillCode = trainedSkillCode;
+    base.trainedSkillLabel = SKILL_LABELS[trainedSkillCode] || skillOptions[trainedSkillCode] || trainedSkillCode;
+    base.trainingKind = getTrainingKindForSkill(trainedSkillCode);
+    base.trainedLevel = getTrainedLevelFromRowElement(row, selectedOption, trainedSkillCode, base.attributes);
+
+    return base;
+  }
+
+  function getTrainedLevelFromRowElement(row, selectedOption, trainedSkillCode, attributes) {
+    var selectedInput;
+    var valueCell;
+
+    if (!selectedOption || selectedOption === 'nietrenuj') {
+      return null;
+    }
+
+    if (selectedOption === 'wybrany') {
+      return attributes && attributes[trainedSkillCode] != null ? attributes[trainedSkillCode] : null;
+    }
+
+    selectedInput = row.querySelector('input[type="radio"][value="' + selectedOption + '"]');
+    valueCell = selectedInput && selectedInput.closest && selectedInput.closest('td')
+      ? selectedInput.closest('td').nextElementSibling
+      : null;
+
+    return valueCell ? parseNumber(valueCell.textContent || valueCell.innerText || '') : null;
   }
 
   function parseLastTrainingEffectsFromHtml(html) {
@@ -737,6 +857,7 @@
     BUILDING_BY_KIND: BUILDING_BY_KIND,
     parseAjaxVmBody: parseAjaxVmBody,
     parseSeniorTrainingSnapshotFromHtml: parseSeniorTrainingSnapshotFromHtml,
+    parseSeniorTrainingSnapshotFromRoot: parseSeniorTrainingSnapshotFromRoot,
     parseLastTrainingEffectsFromHtml: parseLastTrainingEffectsFromHtml,
     pairTrainingSnapshots: pairTrainingSnapshots,
     parseCoachesFromHtml: parseCoachesFromHtml,
