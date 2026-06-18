@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Training History Exporter
 // @namespace    https://vm-manager.org/
-// @version      0.1.0
+// @version      0.1.1
 // @description  Saves senior training before/after snapshots locally and exports training history as JSON/CSV.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -30,6 +30,7 @@
   var STORE_SESSIONS = 'sessions';
   var SNAPSHOT_CACHE_KEY = 'vth.pendingSeniorSnapshot.v1';
   var CONTEXT_CACHE_KEY = 'vth.trainingContext.v1';
+  var SNAPSHOT_TTL_MS = 60 * 60 * 1000;
   var CONTEXT_TTL_MS = 10 * 60 * 1000;
   var TRAINING_ACTION = 'TrainingAccept';
   var COACHES_URL = '/Ajax_handler.php?phpsite=view_body.php&action=Coaches';
@@ -260,7 +261,7 @@
     setStatus('Snapshot przed treningiem zapisany.', 'ok');
   }
 
-  function trySaveAfterTraining() {
+  function trySaveAfterTraining(forceStatus) {
     var pending;
     var afterSnapshot;
     var trainingKind;
@@ -271,12 +272,18 @@
     }
 
     pending = readPendingSnapshot();
-    if (!pending || !pending.snapshot || Date.now() - pending.createdAt > 5 * 60 * 1000) {
+    if (!pending || !pending.snapshot || Date.now() - pending.createdAt > SNAPSHOT_TTL_MS) {
+      if (forceStatus) {
+        setStatus('Brak snapshotu przed treningiem. Kliknij Snapshot przed przed nastepnym treningiem.', 'error');
+      }
       return;
     }
 
     afterSnapshot = parseCurrentSnapshot();
     if (!afterSnapshot || !afterSnapshot.players || !afterSnapshot.players.length) {
+      if (forceStatus) {
+        setStatus('Nie widze tabeli treningu do zapisu po.', 'error');
+      }
       return;
     }
 
@@ -299,6 +306,7 @@
         clearPendingSnapshot();
         setStatus('Zapisano sesje treningowa: ' + session.records.length + ' rekordow.', 'ok');
         updateStats();
+        refreshPreviewIfOpen();
         return session;
       });
     }).catch(function (error) {
@@ -334,6 +342,8 @@
       + '<button type="button" class="vth-btn" id="vth-export-json" title="Pobierz cala lokalna historie jako JSON">Eksport JSON</button>'
       + '<button type="button" class="vth-btn" id="vth-export-csv" title="Pobierz cala lokalna historie jako CSV">Eksport CSV</button>'
       + '<button type="button" class="vth-btn" id="vth-preview-toggle">Podglad</button>'
+      + '<button type="button" class="vth-btn" id="vth-capture-before" title="Awaryjnie zapisz obecna tabele jako stan przed treningiem">Snapshot przed</button>'
+      + '<button type="button" class="vth-btn" id="vth-save-after" title="Awaryjnie porownaj obecna tabele ze snapshotem przed i zapisz sesje">Zapisz po</button>'
       + '<button type="button" class="vth-btn" id="vth-clear">Wyczysc</button>'
       + '<span class="vth-status" id="vth-count"></span>'
       + '</div>'
@@ -343,6 +353,10 @@
     panel.querySelector('#vth-export-json').addEventListener('click', exportJson);
     panel.querySelector('#vth-export-csv').addEventListener('click', exportCsv);
     panel.querySelector('#vth-preview-toggle').addEventListener('click', togglePreview);
+    panel.querySelector('#vth-capture-before').addEventListener('click', captureBeforeTraining);
+    panel.querySelector('#vth-save-after').addEventListener('click', function () {
+      trySaveAfterTraining(true);
+    });
     panel.querySelector('#vth-clear').addEventListener('click', clearHistory);
     updateStats();
     return panel;
@@ -371,9 +385,33 @@
       if (count) {
         count.textContent = 'Lokalnie: ' + sessions.length + ' sesji / ' + records + ' rekordow';
       }
+      updatePendingStatus();
     }).catch(function () {
       // Stats are non-critical.
     });
+  }
+
+  function updatePendingStatus() {
+    var pending = readPendingSnapshot();
+    var hasEffects = /Efekt ostatniego treningu/i.test(document.body ? document.body.textContent || '' : '');
+
+    if (pending && pending.snapshot) {
+      setStatus('Jest snapshot przed treningiem. Po wykonaniu treningu zapisze sesje.', 'ok');
+      return;
+    }
+
+    if (hasEffects) {
+      setStatus('Widze efekt ostatniego treningu, ale nie mam snapshotu przed. Nastepny trening powinien zapisac sie automatycznie.', 'error');
+    }
+  }
+
+  function refreshPreviewIfOpen() {
+    var panel = dom.getVisibleElementById(document, PANEL_ID);
+    var preview = panel ? panel.querySelector('#vth-preview') : null;
+
+    if (preview && preview.style.display === 'block') {
+      renderPreview(preview);
+    }
   }
 
   function exportJson() {
@@ -574,17 +612,33 @@
     }
 
     document.body.setAttribute('data-vth-click-bound', '1');
-    document.addEventListener('click', function (event) {
-      var target = event.target;
+    document.addEventListener('pointerdown', captureFromTrainingActionEvent, true);
+    document.addEventListener('mousedown', captureFromTrainingActionEvent, true);
+    document.addEventListener('click', captureFromTrainingActionEvent, true);
+  }
 
-      if (!target || !target.closest) {
-        return;
-      }
+  function captureFromTrainingActionEvent(event) {
+    var target = event.target;
 
-      if (target.closest('[onclick*="MakeTrening"][onclick*="TrainingAccept"], [OnClick*="MakeTrening"][OnClick*="TrainingAccept"]')) {
-        captureBeforeTraining();
-      }
-    }, true);
+    if (!target || !target.closest) {
+      return;
+    }
+
+    if (isTrainingActionTarget(target)) {
+      captureBeforeTraining();
+    }
+  }
+
+  function isTrainingActionTarget(target) {
+    var node = target.closest('[onclick], [OnClick]');
+    var handler;
+
+    if (!node) {
+      return false;
+    }
+
+    handler = node.getAttribute('onclick') || node.getAttribute('OnClick') || '';
+    return handler.indexOf('MakeTrening') !== -1 && handler.indexOf(TRAINING_ACTION) !== -1;
   }
 
   function scheduleEnhance() {
