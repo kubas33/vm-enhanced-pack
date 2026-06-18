@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Training History Parser
 // @namespace    https://vm-manager.org/
-// @version      0.1.0
+// @version      0.1.1
 // @description  Parses senior training snapshots, coaches, infrastructure and training efficiency context.
 // @grant        none
 // @run-at       document-start
@@ -321,14 +321,14 @@
     var source = String(html || '');
     var skillOptions = parseSkillOptionsFromHtml(source);
     var selectedTrainingCode = parseSelectedTrainingCode(source);
-    var rowRegex = /<tr><td class=(["'])second_left_right\1><\/td>[\s\S]*?Player&playerId=(\d+)[\s\S]*?<\/tr><tr><td class=(["'])second_bottom_left\3>/g;
+    var rowRegex = /<tr\b[^>]*>\s*<td\b[^>]*class=["']second_left_right["'][^>]*>[\s\S]*?Player&playerId=(\d+)[\s\S]*?<\/tr>\s*<tr\b[^>]*>\s*<td\b[^>]*class=["']second_bottom_left["'][^>]*>/gi;
     var players = [];
     var seen = {};
     var match;
     var player;
 
     while ((match = rowRegex.exec(source)) !== null) {
-      if (seen[match[2]] || match[0].indexOf(SENIOR_INPUT_PREFIX + match[2]) < 0) {
+      if (seen[match[1]] || match[0].indexOf(SENIOR_INPUT_PREFIX + match[1]) < 0) {
         continue;
       }
       player = parsePlayerFromRowHtml(match[0], selectedTrainingCode, skillOptions);

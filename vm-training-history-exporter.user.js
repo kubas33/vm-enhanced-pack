@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Training History Exporter
 // @namespace    https://vm-manager.org/
-// @version      0.1.1
+// @version      0.1.2
 // @description  Saves senior training before/after snapshots locally and exports training history as JSON/CSV.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -250,15 +250,18 @@
     return trained ? trained.trainingKind : parser.getTrainingKindForSkill(snapshot.selectedTrainingCode);
   }
 
-  function captureBeforeTraining() {
+  function captureBeforeTraining(forceStatus) {
     var snapshot = parseCurrentSnapshot();
 
     if (!snapshot || !snapshot.players || !snapshot.players.length) {
+      if (forceStatus) {
+        setStatus('Nie zapisano snapshotu: parser nie znalazl zawodnikow w tabeli.', 'error');
+      }
       return;
     }
 
     writePendingSnapshot(snapshot);
-    setStatus('Snapshot przed treningiem zapisany.', 'ok');
+    setStatus('Snapshot przed treningiem zapisany: ' + snapshot.players.length + ' zawodnikow.', 'ok');
   }
 
   function trySaveAfterTraining(forceStatus) {
@@ -353,7 +356,9 @@
     panel.querySelector('#vth-export-json').addEventListener('click', exportJson);
     panel.querySelector('#vth-export-csv').addEventListener('click', exportCsv);
     panel.querySelector('#vth-preview-toggle').addEventListener('click', togglePreview);
-    panel.querySelector('#vth-capture-before').addEventListener('click', captureBeforeTraining);
+    panel.querySelector('#vth-capture-before').addEventListener('click', function () {
+      captureBeforeTraining(true);
+    });
     panel.querySelector('#vth-save-after').addEventListener('click', function () {
       trySaveAfterTraining(true);
     });
@@ -599,7 +604,7 @@
     original = window.MakeTrening;
     window.MakeTrening = function (action) {
       if (action === TRAINING_ACTION) {
-        captureBeforeTraining();
+        captureBeforeTraining(false);
       }
       return original.apply(this, arguments);
     };
@@ -625,7 +630,7 @@
     }
 
     if (isTrainingActionTarget(target)) {
-      captureBeforeTraining();
+      captureBeforeTraining(false);
     }
   }
 
