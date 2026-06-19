@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Training History Exporter
 // @namespace    https://vm-manager.org/
-// @version      0.1.7
+// @version      0.1.9
 // @description  Saves senior training before/after snapshots locally and exports training history as JSON/CSV.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -41,6 +41,8 @@
   var lastSavedSessionId = '';
   var lastEmptyPendingLogAt = 0;
   var startupLogged = false;
+  var lastTrainingActionCaptureAt = 0;
+  var lastUnchangedPairLogAt = 0;
 
   function debugLog(level, message, details) {
     var currentConsole = window.console || { log: function () {} };
@@ -402,6 +404,59 @@
     return trained ? trained.trainingKind : parser.getTrainingKindForSkill(snapshot.selectedTrainingCode);
   }
 
+  function hasLastTrainingEffects() {
+    return /Efekt ostatniego treningu/i.test(document.body ? document.body.textContent || '' : '');
+  }
+
+  function captureBeforeTrainingAction(source) {
+    var now = Date.now();
+
+    if (now - lastTrainingActionCaptureAt < 1500) {
+      debugLog('info', 'captureBeforeTrainingAction: skipped duplicate trigger', { source: source });
+      return;
+    }
+
+    lastTrainingActionCaptureAt = now;
+    captureBeforeTraining(false);
+  }
+
+  function hasTrainingResultChange(beforeSnapshot, afterSnapshot) {
+    var afterById = {};
+
+    (afterSnapshot.players || []).forEach(function (player) {
+      afterById[player.playerId] = player;
+    });
+
+    return (beforeSnapshot.players || []).some(function (beforePlayer) {
+      var afterPlayer = afterById[beforePlayer.playerId];
+      var afterLevel;
+
+      if (!afterPlayer) {
+        return false;
+      }
+
+      if (Number(beforePlayer.bar) !== Number(afterPlayer.bar)) {
+        return true;
+      }
+
+      if (!beforePlayer.trainedSkillCode || beforePlayer.selectedOption === 'nietrenuj') {
+        return false;
+      }
+
+      if (beforePlayer.selectedOption === 'wybrany') {
+        afterLevel = afterPlayer.attributes && afterPlayer.attributes[beforePlayer.trainedSkillCode] != null
+          ? afterPlayer.attributes[beforePlayer.trainedSkillCode]
+          : null;
+      } else {
+        afterLevel = afterPlayer.trainedLevel;
+      }
+
+      return beforePlayer.trainedLevel != null
+        && afterLevel != null
+        && Number(beforePlayer.trainedLevel) !== Number(afterLevel);
+    });
+  }
+
   function captureBeforeTraining(forceStatus) {
     var snapshot = parseCurrentSnapshot();
 
@@ -468,9 +523,25 @@
       return;
     }
 
+    effects = parser.parseLastTrainingEffectsFromHtml(document.body ? document.body.innerHTML : '');
+    if (!hasTrainingResultChange(pending.snapshot, afterSnapshot) && !effects.length) {
+      if (forceStatus || Date.now() - lastUnchangedPairLogAt > 5000) {
+        lastUnchangedPairLogAt = Date.now();
+        debugLog('info', 'trySaveAfterTraining: skipped unchanged snapshot pair', {
+          forceStatus: Boolean(forceStatus),
+          before: summarizeSnapshot(pending.snapshot),
+          after: summarizeSnapshot(afterSnapshot),
+          effects: effects.length,
+        });
+      }
+      if (forceStatus) {
+        setStatus('Nie zapisano: nie widze roznicy miedzy snapshotem przed i aktualna tabela.', 'error');
+      }
+      return;
+    }
+
     saveInProgress = true;
     trainingKind = getPrimaryTrainingKind(pending.snapshot);
-    effects = parser.parseLastTrainingEffectsFromHtml(document.body ? document.body.innerHTML : '');
     debugLog('info', 'trySaveAfterTraining: snapshots ready', {
       trainingKind: trainingKind,
       before: summarizeSnapshot(pending.snapshot),
@@ -592,7 +663,7 @@
 
   function updatePendingStatus() {
     var pending = readPendingSnapshot();
-    var hasEffects = /Efekt ostatniego treningu/i.test(document.body ? document.body.textContent || '' : '');
+    var hasEffects = hasLastTrainingEffects();
 
     if (pending && pending.snapshot) {
       setStatus('Jest snapshot przed treningiem. Po wykonaniu treningu zapisze sesje.', 'ok');
@@ -809,7 +880,7 @@
     window.MakeTrening = function (action) {
       debugLog('info', 'MakeTrening called', { action: action });
       if (action === TRAINING_ACTION) {
-        captureBeforeTraining(false);
+        captureBeforeTrainingAction('MakeTrening');
       }
       return original.apply(this, arguments);
     };
@@ -841,7 +912,7 @@
         eventType: event.type,
         targetTag: target.tagName,
       });
-      captureBeforeTraining(false);
+      captureBeforeTrainingAction(event.type);
     }
   }
 
@@ -867,7 +938,7 @@
       if (!startupLogged) {
         startupLogged = true;
         debugLog('info', 'startup', {
-          exporterVersion: '0.1.7',
+          exporterVersion: '0.1.9',
           parserVersion: parser.VERSION || 'unknown',
         });
       }
