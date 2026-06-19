@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Training History Parser
 // @namespace    https://vm-manager.org/
-// @version      0.1.3
+// @version      0.1.4
 // @description  Parses senior training snapshots, coaches, infrastructure and training efficiency context.
 // @grant        none
 // @run-at       document-start
@@ -25,6 +25,7 @@
   var SENIOR_FORM_ID = 'trening_options';
   var SENIOR_SELECT_ID = 'trening_type_senior';
   var SENIOR_INPUT_PREFIX = 'trening_option_';
+  var VERSION = '0.1.4';
   var MAX_COACH_ATTRIBUTE = 30;
   var MAX_SENIOR_INFRASTRUCTURE_BONUS = 20;
 
@@ -850,6 +851,7 @@
   }
 
   return {
+    VERSION: VERSION,
     SENIOR_FORM_ID: SENIOR_FORM_ID,
     SENIOR_SELECT_ID: SENIOR_SELECT_ID,
     SENIOR_INPUT_PREFIX: SENIOR_INPUT_PREFIX,
