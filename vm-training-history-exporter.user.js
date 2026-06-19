@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Training History Exporter
 // @namespace    https://vm-manager.org/
-// @version      0.1.3
+// @version      0.1.4
 // @description  Saves senior training before/after snapshots locally and exports training history as JSON/CSV.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -29,6 +29,7 @@
   var DB_VERSION = 1;
   var STORE_SESSIONS = 'sessions';
   var SNAPSHOT_CACHE_KEY = 'vth.pendingSeniorSnapshot.v1';
+  var SNAPSHOT_LOCAL_CACHE_KEY = 'vth.pendingSeniorSnapshot.local.v1';
   var CONTEXT_CACHE_KEY = 'vth.trainingContext.v1';
   var SNAPSHOT_TTL_MS = 60 * 60 * 1000;
   var CONTEXT_TTL_MS = 10 * 60 * 1000;
@@ -38,6 +39,39 @@
   var enhanceTimer = 0;
   var saveInProgress = false;
   var lastSavedSessionId = '';
+  var lastEmptyPendingLogAt = 0;
+
+  function debugLog(level, message, details) {
+    var currentConsole = window.console || { log: function () {} };
+    var logger = currentConsole[level] || currentConsole.log;
+    if (details === undefined) {
+      logger.call(currentConsole, '[VTH]', message);
+      return;
+    }
+    logger.call(currentConsole, '[VTH]', message, details);
+  }
+
+  function summarizeSnapshot(snapshot) {
+    var trained;
+
+    if (!snapshot) {
+      return { ok: false };
+    }
+
+    trained = (snapshot.players || []).filter(function (player) {
+      return player.selectedOption && player.selectedOption !== 'nietrenuj';
+    });
+
+    return {
+      ok: true,
+      selectedTrainingCode: snapshot.selectedTrainingCode || '',
+      selectedTrainingLabel: snapshot.selectedTrainingLabel || '',
+      players: snapshot.players ? snapshot.players.length : 0,
+      trainedPlayers: trained.length,
+      pool: snapshot.pool || null,
+      firstPlayerId: snapshot.players && snapshot.players[0] ? snapshot.players[0].playerId : '',
+    };
+  }
 
   function injectStyles() {
     var style;
@@ -70,13 +104,24 @@
 
   function parseCurrentSnapshot() {
     var form = getTrainingForm();
+    var snapshot;
+
     if (!form) {
+      debugLog('warn', 'parseCurrentSnapshot: form not found', {
+        expectedFormId: parser.SENIOR_FORM_ID,
+        url: window.location.href,
+      });
       return null;
     }
+
     if (typeof parser.parseSeniorTrainingSnapshotFromRoot === 'function') {
-      return parser.parseSeniorTrainingSnapshotFromRoot(form);
+      snapshot = parser.parseSeniorTrainingSnapshotFromRoot(form);
+    } else {
+      snapshot = parser.parseSeniorTrainingSnapshotFromHtml(form.outerHTML || form.innerHTML || '');
     }
-    return parser.parseSeniorTrainingSnapshotFromHtml(form.outerHTML || form.innerHTML || '');
+
+    debugLog(snapshot && snapshot.players && snapshot.players.length ? 'info' : 'warn', 'parseCurrentSnapshot: parsed', summarizeSnapshot(snapshot));
+    return snapshot;
   }
 
   function openDb() {
@@ -90,9 +135,11 @@
         }
       };
       request.onsuccess = function () {
+        debugLog('info', 'IndexedDB open: success', { dbName: DB_NAME, version: DB_VERSION });
         resolve(request.result);
       };
       request.onerror = function () {
+        debugLog('error', 'IndexedDB open: failed', request.error);
         reject(request.error);
       };
     });
@@ -105,10 +152,15 @@
         tx.objectStore(STORE_SESSIONS).put(session);
         tx.oncomplete = function () {
           db.close();
+          debugLog('info', 'IndexedDB putSession: success', {
+            sessionId: session.id,
+            records: session.records ? session.records.length : 0,
+          });
           resolve(session);
         };
         tx.onerror = function () {
           db.close();
+          debugLog('error', 'IndexedDB putSession: failed', tx.error);
           reject(tx.error);
         };
       });
@@ -151,32 +203,87 @@
 
   function readPendingSnapshot() {
     var raw;
+    var source = 'sessionStorage';
+    var parsed;
 
     try {
       raw = window.sessionStorage.getItem(SNAPSHOT_CACHE_KEY);
-      return raw ? JSON.parse(raw) : null;
     } catch (error) {
+      debugLog('warn', 'readPendingSnapshot: sessionStorage failed', error);
+    }
+
+    if (!raw) {
+      try {
+        raw = window.localStorage.getItem(SNAPSHOT_LOCAL_CACHE_KEY);
+        source = 'localStorage';
+      } catch (localError) {
+        debugLog('warn', 'readPendingSnapshot: localStorage failed', localError);
+      }
+    }
+
+    if (!raw) {
+      if (Date.now() - lastEmptyPendingLogAt > 5000) {
+        lastEmptyPendingLogAt = Date.now();
+        debugLog('info', 'readPendingSnapshot: empty');
+      }
+      return null;
+    }
+
+    try {
+      parsed = JSON.parse(raw);
+      debugLog('info', 'readPendingSnapshot: loaded', {
+        source: source,
+        ageMs: parsed && parsed.createdAt ? Date.now() - parsed.createdAt : null,
+        snapshot: summarizeSnapshot(parsed && parsed.snapshot),
+      });
+      return parsed;
+    } catch (parseError) {
+      debugLog('error', 'readPendingSnapshot: invalid JSON', parseError);
       return null;
     }
   }
 
   function writePendingSnapshot(snapshot) {
+    var payload = JSON.stringify({
+      createdAt: Date.now(),
+      snapshot: snapshot,
+    });
+    var saved = false;
+
     try {
-      window.sessionStorage.setItem(SNAPSHOT_CACHE_KEY, JSON.stringify({
-        createdAt: Date.now(),
-        snapshot: snapshot,
-      }));
+      window.sessionStorage.setItem(SNAPSHOT_CACHE_KEY, payload);
+      saved = true;
     } catch (error) {
-      // History export must not block the VM training action.
+      debugLog('error', 'writePendingSnapshot: sessionStorage failed', error);
     }
+
+    try {
+      window.localStorage.setItem(SNAPSHOT_LOCAL_CACHE_KEY, payload);
+      saved = true;
+    } catch (localError) {
+      debugLog('warn', 'writePendingSnapshot: localStorage fallback failed', localError);
+    }
+
+    debugLog(saved ? 'info' : 'error', 'writePendingSnapshot: finished', {
+      saved: saved,
+      payloadBytes: payload.length,
+      snapshot: summarizeSnapshot(snapshot),
+    });
+    return saved;
   }
 
   function clearPendingSnapshot() {
     try {
       window.sessionStorage.removeItem(SNAPSHOT_CACHE_KEY);
     } catch (error) {
-      // Ignore storage failures.
+      debugLog('warn', 'clearPendingSnapshot: sessionStorage failed', error);
     }
+    try {
+      window.localStorage.removeItem(SNAPSHOT_LOCAL_CACHE_KEY);
+    } catch (localError) {
+      debugLog('warn', 'clearPendingSnapshot: localStorage failed', localError);
+    }
+    debugLog('info', 'clearPendingSnapshot: finished');
   }
 
   function readContextCache() {
@@ -260,13 +367,27 @@
     var snapshot = parseCurrentSnapshot();
 
     if (!snapshot || !snapshot.players || !snapshot.players.length) {
+      debugLog('warn', 'captureBeforeTraining: no players found', {
+        forceStatus: Boolean(forceStatus),
+        snapshot: summarizeSnapshot(snapshot),
+      });
       if (forceStatus) {
         setStatus('Nie zapisano snapshotu: parser nie znalazl zawodnikow w tabeli.', 'error');
       }
       return;
     }
 
-    writePendingSnapshot(snapshot);
+    if (!writePendingSnapshot(snapshot)) {
+      if (forceStatus) {
+        setStatus('Nie zapisano snapshotu: blad storage. Sprawdz konsole [VTH].', 'error');
+      }
+      return;
+    }
+
+    debugLog('info', 'captureBeforeTraining: saved before snapshot', {
+      forceStatus: Boolean(forceStatus),
+      snapshot: summarizeSnapshot(snapshot),
+    });
     setStatus('Snapshot przed treningiem zapisany: ' + snapshot.players.length + ' zawodnikow.', 'ok');
   }
 
@@ -277,11 +398,22 @@
     var effects;
 
     if (saveInProgress) {
+      debugLog('info', 'trySaveAfterTraining: skipped, save already in progress');
       return;
     }
 
+    if (forceStatus) {
+      debugLog('info', 'trySaveAfterTraining: manual start');
+    }
     pending = readPendingSnapshot();
     if (!pending || !pending.snapshot || Date.now() - pending.createdAt > SNAPSHOT_TTL_MS) {
+      if (forceStatus || pending) {
+        debugLog('warn', 'trySaveAfterTraining: missing or expired before snapshot', {
+          hasPending: Boolean(pending),
+          hasSnapshot: Boolean(pending && pending.snapshot),
+          ageMs: pending && pending.createdAt ? Date.now() - pending.createdAt : null,
+        });
+      }
       if (forceStatus) {
         setStatus('Brak snapshotu przed treningiem. Kliknij Snapshot przed przed nastepnym treningiem.', 'error');
       }
@@ -290,6 +422,7 @@
 
     afterSnapshot = parseCurrentSnapshot();
     if (!afterSnapshot || !afterSnapshot.players || !afterSnapshot.players.length) {
+      debugLog('warn', 'trySaveAfterTraining: no after snapshot players', summarizeSnapshot(afterSnapshot));
       if (forceStatus) {
         setStatus('Nie widze tabeli treningu do zapisu po.', 'error');
       }
@@ -299,6 +432,12 @@
     saveInProgress = true;
     trainingKind = getPrimaryTrainingKind(pending.snapshot);
     effects = parser.parseLastTrainingEffectsFromHtml(document.body ? document.body.innerHTML : '');
+    debugLog('info', 'trySaveAfterTraining: snapshots ready', {
+      trainingKind: trainingKind,
+      before: summarizeSnapshot(pending.snapshot),
+      after: summarizeSnapshot(afterSnapshot),
+      effects: effects.length,
+    });
 
     getTrainingContext(trainingKind).then(function (context) {
       var session = parser.pairTrainingSnapshots(pending.snapshot, afterSnapshot, Object.assign({}, context, {
@@ -306,7 +445,14 @@
         lastEffects: effects,
       }));
 
+      debugLog('info', 'trySaveAfterTraining: paired session', {
+        sessionId: session.id,
+        records: session.records ? session.records.length : 0,
+        lastSavedSessionId: lastSavedSessionId,
+      });
+
       if (session.id === lastSavedSessionId) {
+        debugLog('info', 'trySaveAfterTraining: duplicate session skipped', { sessionId: session.id });
         return session;
       }
 
@@ -319,6 +465,7 @@
         return session;
       });
     }).catch(function (error) {
+      debugLog('error', 'trySaveAfterTraining: failed', error);
       setStatus('Nie zapisano historii: ' + error.message, 'error');
     }).finally(function () {
       saveInProgress = false;
@@ -363,9 +510,11 @@
     panel.querySelector('#vth-export-csv').addEventListener('click', exportCsv);
     panel.querySelector('#vth-preview-toggle').addEventListener('click', togglePreview);
     panel.querySelector('#vth-capture-before').addEventListener('click', function () {
+      debugLog('info', 'manual button: Snapshot przed clicked');
       captureBeforeTraining(true);
     });
     panel.querySelector('#vth-save-after').addEventListener('click', function () {
+      debugLog('info', 'manual button: Zapisz po clicked');
       trySaveAfterTraining(true);
     });
     panel.querySelector('#vth-clear').addEventListener('click', clearHistory);
@@ -603,18 +752,30 @@
   function patchMakeTrening() {
     var original;
 
-    if (window.__vthMakeTreningPatched || typeof window.MakeTrening !== 'function') {
+    if (window.__vthMakeTreningPatched) {
+      return;
+    }
+
+    if (typeof window.MakeTrening !== 'function') {
+      if (!window.__vthMakeTreningMissingLogged) {
+        debugLog('warn', 'patchMakeTrening: MakeTrening not available yet', {
+          makeTreningType: typeof window.MakeTrening,
+        });
+        window.__vthMakeTreningMissingLogged = true;
+      }
       return;
     }
 
     original = window.MakeTrening;
     window.MakeTrening = function (action) {
+      debugLog('info', 'MakeTrening called', { action: action });
       if (action === TRAINING_ACTION) {
         captureBeforeTraining(false);
       }
       return original.apply(this, arguments);
     };
     window.__vthMakeTreningPatched = true;
+    debugLog('info', 'patchMakeTrening: installed');
   }
 
   function bindClickFallback() {
@@ -626,6 +787,7 @@
     document.addEventListener('pointerdown', captureFromTrainingActionEvent, true);
     document.addEventListener('mousedown', captureFromTrainingActionEvent, true);
     document.addEventListener('click', captureFromTrainingActionEvent, true);
+    debugLog('info', 'bindClickFallback: installed');
   }
 
   function captureFromTrainingActionEvent(event) {
@@ -636,6 +798,10 @@
     }
 
     if (isTrainingActionTarget(target)) {
+      debugLog('info', 'captureFromTrainingActionEvent: training action detected', {
+        eventType: event.type,
+        targetTag: target.tagName,
+      });
       captureBeforeTraining(false);
     }
   }
