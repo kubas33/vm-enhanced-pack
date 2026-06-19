@@ -105,6 +105,7 @@
   function parseCurrentSnapshot() {
     var form = getTrainingForm();
     var snapshot;
+    var htmlSnapshot;
 
     if (!form) {
       debugLog('warn', 'parseCurrentSnapshot: form not found', {
@@ -118,6 +119,17 @@
       snapshot = parser.parseSeniorTrainingSnapshotFromRoot(form);
     } else {
       snapshot = parser.parseSeniorTrainingSnapshotFromHtml(form.outerHTML || form.innerHTML || '');
+    }
+
+    if ((!snapshot || !snapshot.players || !snapshot.players.length) && typeof parser.parseSeniorTrainingSnapshotFromHtml === 'function') {
+      htmlSnapshot = parser.parseSeniorTrainingSnapshotFromHtml(form.outerHTML || form.innerHTML || '');
+      debugLog(htmlSnapshot && htmlSnapshot.players && htmlSnapshot.players.length ? 'info' : 'warn', 'parseCurrentSnapshot: DOM parser empty, HTML fallback result', {
+        dom: summarizeSnapshot(snapshot),
+        html: summarizeSnapshot(htmlSnapshot),
+      });
+      if (htmlSnapshot && htmlSnapshot.players && htmlSnapshot.players.length) {
+        snapshot = htmlSnapshot;
+      }
     }
 
     debugLog(snapshot && snapshot.players && snapshot.players.length ? 'info' : 'warn', 'parseCurrentSnapshot: parsed', summarizeSnapshot(snapshot));
