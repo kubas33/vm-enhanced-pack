@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Training History Exporter
 // @namespace    https://vm-manager.org/
-// @version      0.1.4
+// @version      0.1.6
 // @description  Saves senior training before/after snapshots locally and exports training history as JSON/CSV.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -106,6 +106,8 @@
     var form = getTrainingForm();
     var snapshot;
     var htmlSnapshot;
+    var bodySnapshot;
+    var bodyHtmlSnapshot;
 
     if (!form) {
       debugLog('warn', 'parseCurrentSnapshot: form not found', {
@@ -126,9 +128,33 @@
       debugLog(htmlSnapshot && htmlSnapshot.players && htmlSnapshot.players.length ? 'info' : 'warn', 'parseCurrentSnapshot: DOM parser empty, HTML fallback result', {
         dom: summarizeSnapshot(snapshot),
         html: summarizeSnapshot(htmlSnapshot),
+        formRadioInputs: form.querySelectorAll ? form.querySelectorAll('input[type="radio"][name^="' + parser.SENIOR_INPUT_PREFIX + '"]').length : null,
+        bodyRadioInputs: document.body && document.body.querySelectorAll ? document.body.querySelectorAll('input[type="radio"][name^="' + parser.SENIOR_INPUT_PREFIX + '"]').length : null,
       });
       if (htmlSnapshot && htmlSnapshot.players && htmlSnapshot.players.length) {
         snapshot = htmlSnapshot;
+      }
+    }
+
+    if ((!snapshot || !snapshot.players || !snapshot.players.length) && document.body && typeof parser.parseSeniorTrainingSnapshotFromRoot === 'function') {
+      bodySnapshot = parser.parseSeniorTrainingSnapshotFromRoot(document.body);
+      debugLog(bodySnapshot && bodySnapshot.players && bodySnapshot.players.length ? 'info' : 'warn', 'parseCurrentSnapshot: document.body DOM fallback result', {
+        previous: summarizeSnapshot(snapshot),
+        body: summarizeSnapshot(bodySnapshot),
+      });
+      if (bodySnapshot && bodySnapshot.players && bodySnapshot.players.length) {
+        snapshot = bodySnapshot;
+      }
+    }
+
+    if ((!snapshot || !snapshot.players || !snapshot.players.length) && document.body && typeof parser.parseSeniorTrainingSnapshotFromHtml === 'function') {
+      bodyHtmlSnapshot = parser.parseSeniorTrainingSnapshotFromHtml(document.body.innerHTML || '');
+      debugLog(bodyHtmlSnapshot && bodyHtmlSnapshot.players && bodyHtmlSnapshot.players.length ? 'info' : 'warn', 'parseCurrentSnapshot: document.body HTML fallback result', {
+        previous: summarizeSnapshot(snapshot),
+        bodyHtml: summarizeSnapshot(bodyHtmlSnapshot),
+      });
+      if (bodyHtmlSnapshot && bodyHtmlSnapshot.players && bodyHtmlSnapshot.players.length) {
+        snapshot = bodyHtmlSnapshot;
       }
     }
 

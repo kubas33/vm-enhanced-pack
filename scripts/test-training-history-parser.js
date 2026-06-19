@@ -20,7 +20,9 @@ var infrastructureHtml = fixtureBody('infrastructure-building.md');
 
 var before = parser.parseSeniorTrainingSnapshotFromHtml(beforeHtml);
 var after = parser.parseSeniorTrainingSnapshotFromHtml(afterHtml);
+var beforeFromDomHtml = parser.parseSeniorTrainingSnapshotFromHtml(beforeHtml.replace(/Player&playerId=/g, 'Player&amp;playerId='));
 var effects = parser.parseLastTrainingEffectsFromHtml(afterHtml);
+var effectsFromDomHtml = parser.parseLastTrainingEffectsFromHtml(afterHtml.replace(/Player&playerId=/g, 'Player&amp;playerId='));
 var coaches = parser.parseCoachesFromHtml(coachesHtml);
 var infrastructure = parser.parseInfrastructureFromHtml(infrastructureHtml);
 var efficiency = parser.calculateSeniorEfficiency(coaches, infrastructure, 'technical');
@@ -38,6 +40,7 @@ assert.strictEqual(before.selectedTrainingLabel, 'Blok', 'expected selected trai
 assert.deepStrictEqual(before.pool, { current: 33, max: 60 }, 'expected senior training pool');
 assert.strictEqual(before.players.length, 24, 'expected 24 senior training rows before training');
 assert.strictEqual(after.players.length, 24, 'expected 24 senior training rows after training');
+assert.strictEqual(beforeFromDomHtml.players.length, 24, 'expected browser outerHTML encoded player links to parse');
 
 var mansoBefore = before.players.find(function (player) { return player.playerId === '2060721'; });
 var mansoAfter = after.players.find(function (player) { return player.playerId === '2060721'; });
@@ -65,6 +68,7 @@ assert.ok(konarskiRecord, 'expected Konarski record');
 assert.strictEqual(konarskiRecord.effectJumpReported, true, 'expected reported level jump for Konarski block training');
 
 assert.strictEqual(effects.length, 2, 'expected two reported level jumps');
+assert.strictEqual(effectsFromDomHtml.length, 2, 'expected browser outerHTML encoded effect links to parse');
 assert.strictEqual(coaches.length, 3, 'expected three coach roles');
 assert.strictEqual(coaches[0].attributes['Trening techniczny'], 30, 'expected head coach technical training');
 assert.strictEqual(coaches[1].attributes['Zdolnosci adaptacyjne'], 30, 'expected assistant adaptability');

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Training History Parser
 // @namespace    https://vm-manager.org/
-// @version      0.1.2
+// @version      0.1.3
 // @description  Parses senior training snapshots, coaches, infrastructure and training efficiency context.
 // @grant        none
 // @run-at       document-start
@@ -259,7 +259,7 @@
 
   function parsePlayerFromRowHtml(rowHtml, selectedTrainingCode, skillOptions) {
     var source = String(rowHtml || '');
-    var idMatch = source.match(/Player&playerId=(\d+)/);
+    var idMatch = source.match(/Player(?:&|&amp;)playerId=(\d+)/);
     var nameMatch = source.match(/<span class=['"]small_link['"][\s\S]*?<b>([^<]+)<\/b>,\s*([^<(]+)(?:\((\d{1,2})\s*lat,\s*(\d+)\s*cm\))?/i);
     var positionMatch = source.match(/<font class=green>([^<]+)<\/font>/i);
     var barMatch = source.match(/&nbsp;\s*(\d+)\s*%/i);
@@ -321,7 +321,7 @@
     var source = String(html || '');
     var skillOptions = parseSkillOptionsFromHtml(source);
     var selectedTrainingCode = parseSelectedTrainingCode(source);
-    var rowRegex = /<tr\b[^>]*>\s*<td\b[^>]*class=["']second_left_right["'][^>]*>[\s\S]*?Player&playerId=(\d+)[\s\S]*?<\/tr>\s*<tr\b[^>]*>\s*<td\b[^>]*class=["']second_bottom_left["'][^>]*>/gi;
+    var rowRegex = /<tr\b[^>]*>\s*<td\b[^>]*class=["']second_left_right["'][^>]*>[\s\S]*?Player(?:&|&amp;)playerId=(\d+)[\s\S]*?<\/tr>\s*<tr\b[^>]*>\s*<td\b[^>]*class=["']second_bottom_left["'][^>]*>/gi;
     var players = [];
     var seen = {};
     var match;
@@ -470,7 +470,7 @@
   function parseLastTrainingEffectsFromHtml(html) {
     var source = String(html || '');
     var beforePool = source.split(/Punkty treningowe:/i)[0];
-    var regex = /Player&playerId=(\d+)[\s\S]*?<b>([^<]+)<\/b>,\s*([^<]+)<\/span><\/td><td[^>]*align=["']right["']>([\s\S]*?)<\/td><td[^>]*align=["']right["']>(\d+)<\/td>/g;
+    var regex = /Player(?:&|&amp;)playerId=(\d+)[\s\S]*?<b>([^<]+)<\/b>,\s*([^<]+)<\/span><\/td><td[^>]*align=["']right["']>([\s\S]*?)<\/td><td[^>]*align=["']right["']>(\d+)<\/td>/g;
     var result = [];
     var match;
 
