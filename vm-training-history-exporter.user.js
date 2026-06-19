@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Training History Exporter
 // @namespace    https://vm-manager.org/
-// @version      0.1.9
+// @version      0.1.10
 // @description  Saves senior training before/after snapshots locally and exports training history as JSON/CSV.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -10,7 +10,7 @@
 // @run-at       document-end
 // @grant        none
 // @require      https://github.com/kubas33/vm-enhanced-pack/raw/refs/heads/main/vm-dom-utils.js
-// @require      https://github.com/kubas33/vm-enhanced-pack/raw/refs/heads/main/vm-training-history-parser.js?v=0.1.4
+// @require      https://github.com/kubas33/vm-enhanced-pack/raw/refs/heads/main/vm-training-history-parser.js?v=0.1.5
 // ==/UserScript==
 
 (function () {
@@ -938,7 +938,7 @@
       if (!startupLogged) {
         startupLogged = true;
         debugLog('info', 'startup', {
-          exporterVersion: '0.1.9',
+          exporterVersion: '0.1.10',
           parserVersion: parser.VERSION || 'unknown',
         });
       }

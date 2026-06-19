@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Training History Parser
 // @namespace    https://vm-manager.org/
-// @version      0.1.4
+// @version      0.1.5
 // @description  Parses senior training snapshots, coaches, infrastructure and training efficiency context.
 // @grant        none
 // @run-at       document-start
@@ -25,7 +25,7 @@
   var SENIOR_FORM_ID = 'trening_options';
   var SENIOR_SELECT_ID = 'trening_type_senior';
   var SENIOR_INPUT_PREFIX = 'trening_option_';
-  var VERSION = '0.1.4';
+  var VERSION = '0.1.5';
   var MAX_COACH_ATTRIBUTE = 30;
   var MAX_SENIOR_INFRASTRUCTURE_BONUS = 20;
 
@@ -214,7 +214,7 @@
 
   function parseAttributesFromRowHtml(rowHtml) {
     var result = {};
-    var regex = /span_player_value_(UM_[A-Z0-9_]+)[^>]*>[\s\S]*?<font class=['"]?link['"]?>\(([-\d.,]+)\)/g;
+    var regex = /(?:name|id)=\\?['"]span_player_value_(UM_[A-Z0-9_]+)\\?['"][^>]*>([\s\S]*?)(?=<span\b|<\/td>|<\/tr>)/gi;
     var match;
     var value;
 

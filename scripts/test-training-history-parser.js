@@ -45,6 +45,7 @@ assert.strictEqual(beforeFromDomHtml.players.length, 24, 'expected browser outer
 var mansoBefore = before.players.find(function (player) { return player.playerId === '2060721'; });
 var mansoAfter = after.players.find(function (player) { return player.playerId === '2060721'; });
 var mansoRecord = session.records.find(function (record) { return record.playerId === '2060721'; });
+var wojciechowskiBefore = before.players.find(function (player) { return player.playerId === '1903780'; });
 
 assert.ok(mansoBefore, 'expected Manso before row');
 assert.ok(mansoAfter, 'expected Manso after row');
@@ -55,6 +56,7 @@ assert.strictEqual(mansoAfter.trainedLevel, 40.1, 'expected Manso post-training 
 assert.strictEqual(mansoRecord.levelBefore, 34.9, 'expected record level before');
 assert.strictEqual(mansoRecord.levelAfter, 40.1, 'expected record level after');
 assert.strictEqual(mansoRecord.delta, 5.2, 'expected record delta from fixture pair');
+assert.strictEqual(wojciechowskiBefore.attributes.UM_USTAWIANIE, 40.9, 'expected hidden Ustawianie decimal value from player row');
 
 var rapcanAfter = after.players.find(function (player) { return player.playerId === '2059902'; });
 assert.ok(rapcanAfter, 'expected Rapcan after row');
