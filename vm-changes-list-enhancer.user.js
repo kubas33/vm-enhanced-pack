@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Changes List Enhancer
 // @namespace    https://vm-manager.org/
-// @version      0.1.8
+// @version      0.1.9
 // @description  Sorting and filtering for VM Manager tactic changes list view.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -49,6 +49,11 @@
   var PLAYER_FILTER_ID = 'vtcl-player-filter';
   var SEARCH_INPUT_ID = 'vtcl-search-input';
   var COUNTER_CLASS = 'vtcl-counter';
+  var BULK_CHECKBOX_CLASS = 'vtcl-bulk-checkbox';
+  var BULK_SELECT_VISIBLE_CLASS = 'vtcl-bulk-select-visible';
+  var BULK_CLEAR_CLASS = 'vtcl-bulk-clear';
+  var BULK_DELETE_CLASS = 'vtcl-bulk-delete';
+  var BULK_STATUS_CLASS = 'vtcl-bulk-status';
 
   var DEBUG_STORAGE_KEY = 'vtcl.debug';
   var STATE_STORAGE_KEY = 'vtcl.listState.v1';
@@ -370,6 +375,20 @@
     }
   }
 
+  function clearListState() {
+    var storage = getStorage();
+
+    if (!storage) {
+      return;
+    }
+
+    try {
+      storage.removeItem(STATE_STORAGE_KEY);
+    } catch (error) {
+      // ignore storage failures
+    }
+  }
+
   function getCurrentListState(documentRef) {
     var panel = getFilterPanel(documentRef);
     var search = panel ? panel.querySelector('#' + dom.cssEscape(SEARCH_INPUT_ID)) : null;
@@ -526,6 +545,86 @@
     var match = editLink ? getOnClick(editLink).match(/changeId=(\d+)/) : null;
 
     return match ? match[1] : '';
+  }
+
+  function getChangeDeleteRoute(row) {
+    var deleteLink = Array.prototype.slice.call(row.querySelectorAll('span.small_link')).find(function (el) {
+      return getOnClick(el).indexOf('ChangeDelete&changeId=') !== -1;
+    });
+    var onclick = deleteLink ? getOnClick(deleteLink) : '';
+    var match = onclick.match(/callGetViewPanelBodyBig_1\(['"]([^'"]+)['"]\)/);
+
+    return match ? match[1] : '';
+  }
+
+  function parseVmRoute(route) {
+    var parts = String(route || '').split('&');
+    var action = parts.shift() || '';
+    var params = {};
+
+    parts.forEach(function (part) {
+      var splitAt = part.indexOf('=');
+      var key;
+      var value;
+
+      if (splitAt === -1) {
+        return;
+      }
+
+      key = part.slice(0, splitAt);
+      value = part.slice(splitAt + 1);
+
+      try {
+        key = decodeURIComponent(key.replace(/\+/g, ' '));
+        value = decodeURIComponent(value.replace(/\+/g, ' '));
+      } catch (error) {
+        // keep raw values when decoding fails
+      }
+
+      params[key] = value;
+    });
+
+    return {
+      action: action,
+      params: params
+    };
+  }
+
+  function buildAjaxUrlFromVmRoute(route) {
+    var parsed = parseVmRoute(route);
+    var params = new URLSearchParams({
+      phpsite: 'view_body.php',
+      action: parsed.action
+    });
+
+    Object.keys(parsed.params).forEach(function (key) {
+      params.set(key, parsed.params[key]);
+    });
+
+    return '/Ajax_handler.php?' + params.toString();
+  }
+
+  function getChangesListRouteFromDeleteRoute(route) {
+    var parsed = parseVmRoute(route);
+    var type = parsed.params.type || 'League';
+
+    return parsed.action + '&type=' + encodeURIComponent(type) + '&subview=Changes';
+  }
+
+  async function deleteChangeByRoute(route) {
+    var response = await fetch(buildAjaxUrlFromVmRoute(route), {
+      method: 'GET',
+      credentials: 'same-origin',
+      headers: {
+        'X-Requested-With': 'XMLHttpRequest'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error('HTTP ' + response.status);
+    }
+
+    return response.text();
   }
 
   function stripHtmlTags(value) {
@@ -714,6 +813,201 @@
       blockRow: blockRow,
       spacerRow: null
     };
+  }
+
+  function getBulkCheckboxes(documentRef) {
+    return Array.prototype.slice.call(documentRef.querySelectorAll('.' + BULK_CHECKBOX_CLASS));
+  }
+
+  function getSelectedBulkItems(documentRef) {
+    return getBulkCheckboxes(documentRef)
+      .filter(function (checkbox) {
+        return checkbox.checked;
+      })
+      .map(function (checkbox) {
+        var row = checkbox.closest('tr');
+        var parsed = row ? parseChangeRow(row) : null;
+
+        if (!row || !parsed || !parsed.changeId) {
+          return null;
+        }
+
+        return {
+          row: row,
+          checkbox: checkbox,
+          changeId: parsed.changeId,
+          label: parsed.playerOut + ' <= ' + parsed.playerIn,
+          route: getChangeDeleteRoute(row)
+        };
+      })
+      .filter(function (item) {
+        return item && item.route;
+      });
+  }
+
+  function isBulkCheckboxVisible(checkbox) {
+    var row = checkbox ? checkbox.closest('tr') : null;
+    var block = row ? getChangeBlock(row) : null;
+
+    return Boolean(block && block.blockRow.style.display !== 'none');
+  }
+
+  function updateBulkDeleteControls(documentRef) {
+    var panel = getFilterPanel(documentRef);
+    var selectedCount = getSelectedBulkItems(documentRef).length;
+    var status = panel ? panel.querySelector('.' + BULK_STATUS_CLASS) : null;
+    var deleteButton = panel ? panel.querySelector('.' + BULK_DELETE_CLASS) : null;
+    var clearButton = panel ? panel.querySelector('.' + BULK_CLEAR_CLASS) : null;
+
+    if (status) {
+      status.textContent = selectedCount ? 'Zaznaczono: ' + selectedCount : 'Zaznacz wybrane zmiany do usunięcia.';
+    }
+
+    if (deleteButton) {
+      deleteButton.disabled = selectedCount === 0;
+    }
+
+    if (clearButton) {
+      clearButton.disabled = selectedCount === 0;
+    }
+  }
+
+  function ensureBulkCheckbox(row) {
+    var links;
+    var targetCell;
+    var wrap;
+    var checkbox;
+
+    if (!row || row.querySelector('.' + BULK_CHECKBOX_CLASS)) {
+      return;
+    }
+
+    links = getPlayerLinks(row);
+    targetCell = links[0] ? links[0].closest('td') : row.cells[0];
+    if (!targetCell) {
+      return;
+    }
+
+    wrap = row.ownerDocument.createElement('label');
+    checkbox = row.ownerDocument.createElement('input');
+
+    wrap.className = 'vtcl-bulk-checkbox-wrap';
+    wrap.title = 'Zaznacz zmianę do masowego usunięcia';
+    checkbox.type = 'checkbox';
+    checkbox.className = BULK_CHECKBOX_CLASS;
+    checkbox.value = getChangeId(row);
+
+    checkbox.addEventListener('change', function () {
+      updateBulkDeleteControls(row.ownerDocument);
+    });
+
+    wrap.appendChild(checkbox);
+    targetCell.insertBefore(wrap, targetCell.firstChild);
+  }
+
+  function ensureBulkCheckboxes(documentRef, listRoot) {
+    var root = listRoot || getCachedListRoot() || findChangesListRoot(documentRef);
+
+    if (!root) {
+      return;
+    }
+
+    root.dataRows.forEach(ensureBulkCheckbox);
+    updateBulkDeleteControls(documentRef);
+  }
+
+  function clearBulkSelection(documentRef) {
+    getBulkCheckboxes(documentRef).forEach(function (checkbox) {
+      checkbox.checked = false;
+    });
+    updateBulkDeleteControls(documentRef);
+  }
+
+  function selectVisibleBulkRows(documentRef) {
+    getBulkCheckboxes(documentRef).forEach(function (checkbox) {
+      if (isBulkCheckboxVisible(checkbox)) {
+        checkbox.checked = true;
+      }
+    });
+    updateBulkDeleteControls(documentRef);
+  }
+
+  function removeBulkDeleteControls(documentRef) {
+    Array.prototype.slice.call(documentRef.querySelectorAll('.vtcl-bulk-checkbox-wrap')).forEach(function (wrap) {
+      wrap.remove();
+    });
+  }
+
+  async function deleteSelectedChanges(documentRef) {
+    var items = getSelectedBulkItems(documentRef);
+    var panel = getFilterPanel(documentRef);
+    var status = panel ? panel.querySelector('.' + BULK_STATUS_CLASS) : null;
+    var buttons = panel ? panel.querySelectorAll('button') : [];
+    var listRoute;
+    var summary;
+    var i;
+
+    if (!items.length) {
+      updateBulkDeleteControls(documentRef);
+      return;
+    }
+
+    summary = items.slice(0, 12).map(function (item) {
+      return item.label;
+    }).join('\n');
+
+    if (items.length > 12) {
+      summary += '\n...';
+    }
+
+    if (!root.confirm('Usunąć zaznaczone zmiany: ' + items.length + '?\n\n' + summary)) {
+      return;
+    }
+
+    Array.prototype.forEach.call(buttons, function (button) {
+      button.disabled = true;
+    });
+
+    try {
+      for (i = 0; i < items.length; i += 1) {
+        if (status) {
+          status.textContent = 'Usuwam ' + (i + 1) + '/' + items.length + '...';
+        }
+        await deleteChangeByRoute(items[i].route);
+      }
+
+      if (status) {
+        status.textContent = 'Usunięto: ' + items.length;
+      }
+
+      listRoute = getChangesListRouteFromDeleteRoute(items[0].route);
+      clearListContext();
+      lastEnhanceKey = '';
+
+      if (root && typeof root.callGetViewPanelBodyBig_1 === 'function') {
+        root.callGetViewPanelBodyBig_1(listRoute);
+      } else {
+        items.forEach(function (item) {
+          var block = getChangeBlock(item.row);
+
+          if (block && block.blockRow) {
+            block.blockRow.remove();
+          }
+          if (block && block.spacerRow) {
+            block.spacerRow.remove();
+          }
+        });
+        enhanceChangesList(documentRef);
+      }
+    } catch (error) {
+      Array.prototype.forEach.call(buttons, function (button) {
+        button.disabled = false;
+      });
+      if (status) {
+        status.textContent = 'Błąd usuwania: ' + error.message;
+      }
+      updateBulkDeleteControls(documentRef);
+    }
   }
 
   function findChangesListRoot(documentRef) {
@@ -967,6 +1261,7 @@
     });
 
     updateCounter(documentRef, visibleCount, parsedRows.length);
+    updateBulkDeleteControls(documentRef);
   }
 
   function sortChanges(sortKey, direction, documentRef, listRoot, shouldSaveState) {
@@ -1175,7 +1470,7 @@
       checkbox.checked = checkbox.value === 'all';
     });
 
-    saveCurrentListState(documentRef);
+    clearListState();
     applyFilters(documentRef);
   }
 
@@ -1309,6 +1604,22 @@
       '  background: #0b2231;',
       '  color: #d8ecff;',
       '  cursor: pointer;',
+      '}',
+      '.vtcl-bulk-checkbox-wrap {',
+      '  display: inline-flex;',
+      '  align-items: center;',
+      '  margin-right: 6px;',
+      '  vertical-align: middle;',
+      '}',
+      '.vtcl-bulk-checkbox {',
+      '  margin: 0;',
+      '}',
+      '.vtcl-bulk-status {',
+      '  color: #9fb8c7;',
+      '}',
+      '.vtcl-bulk-delete {',
+      '  border-color: rgba(248, 113, 113, 0.65);',
+      '  color: #fecaca;',
       '}'
     ].join('\n');
 
@@ -1320,12 +1631,18 @@
     var rowSearch = documentRef.createElement('div');
     var rowSets = documentRef.createElement('div');
     var rowSort = documentRef.createElement('div');
+    var rowBulk = documentRef.createElement('div');
     var searchLabel = documentRef.createElement('span');
     var searchInput = documentRef.createElement('input');
     var playerLabel = documentRef.createElement('span');
     var playerSelect = documentRef.createElement('select');
     var setsLabel = documentRef.createElement('span');
     var sortLabel = documentRef.createElement('span');
+    var bulkLabel = documentRef.createElement('span');
+    var bulkSelectVisible = documentRef.createElement('button');
+    var bulkClear = documentRef.createElement('button');
+    var bulkDelete = documentRef.createElement('button');
+    var bulkStatus = documentRef.createElement('span');
     var counter = documentRef.createElement('span');
     var reset = documentRef.createElement('button');
     var setNumber;
@@ -1335,6 +1652,7 @@
     rowSearch.className = 'vtcl-filter-row';
     rowSets.className = 'vtcl-filter-row';
     rowSort.className = 'vtcl-filter-row';
+    rowBulk.className = 'vtcl-filter-row';
 
     searchLabel.className = 'vtcl-filter-label';
     searchLabel.textContent = 'Szukaj:';
@@ -1388,9 +1706,44 @@
     rowSort.appendChild(createSortButton(documentRef, 'Liczba setów', SORT_KEYS.activeSetCount));
     rowSort.appendChild(createSortButton(documentRef, 'Sety', SORT_KEYS.activeSets));
 
+    bulkLabel.className = 'vtcl-filter-label';
+    bulkLabel.textContent = 'Masowe usuwanie:';
+
+    bulkSelectVisible.className = 'vtcl-reset ' + BULK_SELECT_VISIBLE_CLASS;
+    bulkSelectVisible.type = 'button';
+    bulkSelectVisible.textContent = 'Zaznacz widoczne';
+    bulkSelectVisible.addEventListener('click', function () {
+      selectVisibleBulkRows(documentRef);
+    });
+
+    bulkClear.className = 'vtcl-reset ' + BULK_CLEAR_CLASS;
+    bulkClear.type = 'button';
+    bulkClear.textContent = 'Odznacz';
+    bulkClear.addEventListener('click', function () {
+      clearBulkSelection(documentRef);
+    });
+
+    bulkDelete.className = 'vtcl-reset ' + BULK_DELETE_CLASS;
+    bulkDelete.type = 'button';
+    bulkDelete.textContent = 'Usuń zaznaczone';
+    bulkDelete.disabled = true;
+    bulkDelete.addEventListener('click', function () {
+      deleteSelectedChanges(documentRef);
+    });
+
+    bulkStatus.className = BULK_STATUS_CLASS;
+    bulkStatus.textContent = 'Zaznacz wybrane zmiany do usunięcia.';
+
+    rowBulk.appendChild(bulkLabel);
+    rowBulk.appendChild(bulkSelectVisible);
+    rowBulk.appendChild(bulkClear);
+    rowBulk.appendChild(bulkDelete);
+    rowBulk.appendChild(bulkStatus);
+
     panel.appendChild(rowSearch);
     panel.appendChild(rowSets);
     panel.appendChild(rowSort);
+    panel.appendChild(rowBulk);
 
     return panel;
   }
@@ -1454,6 +1807,7 @@
     }
 
     removeFilterPanel(documentRef);
+    removeBulkDeleteControls(documentRef);
 
     if (listRoot) {
       listRoot.dataRows.forEach(function (row) {
@@ -1503,6 +1857,7 @@
     panel = documentRef.getElementById(PANEL_ID);
 
     if (enhanceKey === lastEnhanceKey && isPanelMounted(documentRef, listRoot)) {
+      ensureBulkCheckboxes(documentRef, listRoot);
       applyFilters(documentRef, listRoot);
       return;
     }
@@ -1536,6 +1891,7 @@
       documentRef.body.setAttribute(SIGNATURE_ATTR, signature);
       lastEnhanceKey = enhanceKey;
       rememberListContext(listRoot, signature);
+      ensureBulkCheckboxes(documentRef, listRoot);
       restoreFilterPanelState(documentRef, listRoot);
       infoLog('panel filtrów aktywny', describeNode(listRoot.scope));
       debugLog('enhanceChangesList: ok', collectDebugStatus(documentRef));
@@ -1558,7 +1914,7 @@
       return;
     }
 
-    infoLog('VM Changes List Enhancer v0.1.8 — debug: localStorage.setItem("vtcl.debug","1")');
+    infoLog('VM Changes List Enhancer v0.1.9 — debug: localStorage.setItem("vtcl.debug","1")');
     debugLog('start');
 
     if (root) {
