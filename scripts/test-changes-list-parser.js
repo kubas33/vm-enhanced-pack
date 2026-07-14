@@ -9,8 +9,11 @@ var changesEnhancer = require('../vm-changes-list-enhancer.user.js');
 
 var root = path.resolve(__dirname, '..');
 var fixture = fs.readFileSync(path.join(root, 'raw_data', 'changes-list-view.md'), 'utf8');
+var tacticFixture = fs.readFileSync(path.join(root, 'raw_data', 'tactic-page.md'), 'utf8');
 var html = changesEnhancer.extractVmBody(fixture);
+var tacticHtml = changesEnhancer.extractVmBody(tacticFixture);
 var rows = changesEnhancer.parseChangeRowsFromHtml(html);
+var positionMap = changesEnhancer.parsePlayerPositionMapFromTacticHtml(tacticHtml);
 var paverRow = rows.find(function (row) {
   return row.changeId === '5851843';
 });
@@ -41,5 +44,10 @@ assert.strictEqual(
   2,
   'expected active set count sort value'
 );
+
+assert.strictEqual(positionMap['1976867'], 'At', 'expected Caple position');
+assert.strictEqual(positionMap['2060879'], 'Śr', 'expected Paver position');
+assert.strictEqual(positionMap['1904716'], 'R', 'expected Yanagi position');
+assert.strictEqual(positionMap['1928566'], 'L', 'expected Śnieżek position');
 
 console.log('changes list parser ok: ' + rows.length + ' rows parsed');

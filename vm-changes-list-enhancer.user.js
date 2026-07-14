@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Changes List Enhancer
 // @namespace    https://vm-manager.org/
-// @version      0.1.9
+// @version      0.2.0
 // @description  Sorting and filtering for VM Manager tactic changes list view.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -46,9 +46,11 @@
   var SORTABLE_CLASS = 'vtcl-sortable';
   var SORT_MARKER_CLASS = 'vtcl-sort-marker';
   var SET_FILTER_CLASS = 'vtcl-set-filter';
+  var POSITION_FILTER_CLASS = 'vtcl-position-filter';
   var PLAYER_FILTER_ID = 'vtcl-player-filter';
   var SEARCH_INPUT_ID = 'vtcl-search-input';
   var COUNTER_CLASS = 'vtcl-counter';
+  var POSITION_STATUS_CLASS = 'vtcl-position-status';
   var BULK_CHECKBOX_CLASS = 'vtcl-bulk-checkbox';
   var BULK_SELECT_VISIBLE_CLASS = 'vtcl-bulk-select-visible';
   var BULK_CLEAR_CLASS = 'vtcl-bulk-clear';
@@ -57,9 +59,13 @@
 
   var DEBUG_STORAGE_KEY = 'vtcl.debug';
   var STATE_STORAGE_KEY = 'vtcl.listState.v1';
+  var POSITION_OPTIONS = ['At', 'P', 'Śr', 'R', 'L'];
   var enhancing = false;
   var lastEnhanceKey = '';
   var activeListContext = null;
+  var activePositionRoute = '';
+  var activePlayerPositionMap = {};
+  var positionLoadPromises = {};
 
   function findChangeEditAnchor(documentRef, scope, requireVisible) {
     var root = scope && scope.querySelectorAll ? scope : documentRef;
@@ -237,6 +243,20 @@
     return String(value || '').replace(/\s+/g, ' ').trim();
   }
 
+  function normalizePositionShort(value) {
+    var text = normalizeText(value);
+
+    if (text === 'Sr') {
+      return 'Śr';
+    }
+
+    if (text === 'A') {
+      return 'At';
+    }
+
+    return text;
+  }
+
   function getOnClick(el) {
     return el.getAttribute('onclick') || el.getAttribute('OnClick') || '';
   }
@@ -264,6 +284,113 @@
       bodyMatch = responseText.match(/body:\s*'((?:\\.|[^'\\])*)'/);
       return bodyMatch ? unescapeVmString(bodyMatch[1]) : '';
     }
+  }
+
+  function parsePlayerPositionMapFromTacticHtml(html) {
+    var result = {};
+    var optionRegex = /<option\s+value=(['"]?)(\d+)\1[^>]*>\s*\(([^)]+)\)/gi;
+    var match;
+    var position;
+
+    while ((match = optionRegex.exec(String(html || ''))) !== null) {
+      position = normalizePositionShort(match[3]);
+      if (POSITION_OPTIONS.indexOf(position) !== -1) {
+        result[match[2]] = position;
+      }
+    }
+
+    return result;
+  }
+
+  function getChangesRouteFromListRoot(listRoot) {
+    var row = listRoot && listRoot.dataRows && listRoot.dataRows[0];
+    var deleteRoute = row ? getChangeDeleteRoute(row) : '';
+    var parsed;
+
+    if (deleteRoute) {
+      parsed = parseVmRoute(deleteRoute);
+      return parsed.action + '&type=' + encodeURIComponent(parsed.params.type || 'League') + '&subview=Changes';
+    }
+
+    return '';
+  }
+
+  function getTacticRouteFromChangesRoute(route) {
+    var parsed = parseVmRoute(route);
+
+    if (!parsed.action) {
+      return '';
+    }
+
+    return parsed.action + '&type=' + encodeURIComponent(parsed.params.type || 'League') + '&subview=Tactic';
+  }
+
+  function updatePositionStatus(documentRef, text) {
+    var panel = getFilterPanel(documentRef);
+    var status = panel ? panel.querySelector('.' + POSITION_STATUS_CLASS) : null;
+
+    if (status && status.textContent !== (text || '')) {
+      status.textContent = text || '';
+    }
+  }
+
+  function applyPositionMap(documentRef, changesRoute, map) {
+    activePositionRoute = changesRoute || '';
+    activePlayerPositionMap = map || {};
+    updatePositionStatus(documentRef, Object.keys(activePlayerPositionMap).length
+      ? 'Pozycje załadowane.'
+      : 'Pozycje niedostępne.');
+    applyFilters(documentRef);
+  }
+
+  function loadPositionMapForList(documentRef, listRoot) {
+    var changesRoute = getChangesRouteFromListRoot(listRoot);
+    var tacticRoute = getTacticRouteFromChangesRoute(changesRoute);
+
+    if (!changesRoute || !tacticRoute || !root || typeof root.fetch !== 'function') {
+      updatePositionStatus(documentRef, 'Pozycje niedostępne.');
+      return;
+    }
+
+    if (activePositionRoute === changesRoute && Object.keys(activePlayerPositionMap).length) {
+      updatePositionStatus(documentRef, 'Pozycje załadowane.');
+      return;
+    }
+
+    updatePositionStatus(documentRef, 'Ładuję pozycje...');
+
+    if (!positionLoadPromises[changesRoute]) {
+      positionLoadPromises[changesRoute] = root.fetch(buildAjaxUrlFromVmRoute(tacticRoute), {
+        method: 'GET',
+        credentials: 'same-origin',
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest'
+        }
+      })
+        .then(function (response) {
+          if (!response.ok) {
+            throw new Error('HTTP ' + response.status);
+          }
+          return response.text();
+        })
+        .then(function (text) {
+          return parsePlayerPositionMapFromTacticHtml(extractVmBody(text));
+        });
+    }
+
+    positionLoadPromises[changesRoute]
+      .then(function (map) {
+        applyPositionMap(documentRef, changesRoute, map);
+      })
+      .catch(function (error) {
+        debugLog('loadPositionMapForList failed', error && error.message ? error.message : error);
+        if (activePositionRoute !== changesRoute) {
+          activePositionRoute = changesRoute;
+          activePlayerPositionMap = {};
+        }
+        updatePositionStatus(documentRef, 'Nie udało się załadować pozycji.');
+        applyFilters(documentRef, listRoot);
+      });
   }
 
   var SORT_KEYS = {
@@ -320,11 +447,41 @@
     return result.length ? result : ['all'];
   }
 
+  function normalizePositionFilters(values) {
+    var map = {};
+    var result = [];
+
+    if (!Array.isArray(values)) {
+      return ['all'];
+    }
+
+    values.forEach(function (value) {
+      var text = normalizePositionShort(value);
+
+      if (text === 'all' || POSITION_OPTIONS.indexOf(text) !== -1) {
+        map[text] = true;
+      }
+    });
+
+    if (map.all) {
+      return ['all'];
+    }
+
+    POSITION_OPTIONS.forEach(function (value) {
+      if (map[value]) {
+        result.push(value);
+      }
+    });
+
+    return result.length ? result : ['all'];
+  }
+
   function normalizeStoredState(state) {
     var result = {
       search: '',
       playerId: '',
       setFilters: ['all'],
+      positionFilters: ['all'],
       sortKey: '',
       sortDirection: ''
     };
@@ -336,6 +493,7 @@
     result.search = typeof state.search === 'string' ? state.search : '';
     result.playerId = typeof state.playerId === 'string' ? state.playerId : '';
     result.setFilters = normalizeSetFilters(state.setFilters);
+    result.positionFilters = normalizePositionFilters(state.positionFilters);
 
     if (isValidSortKey(state.sortKey) && isValidSortDirection(state.sortDirection)) {
       result.sortKey = state.sortKey;
@@ -396,11 +554,15 @@
     var selectedSets = queryPanelControls(documentRef, '.' + SET_FILTER_CLASS + ':checked').map(function (input) {
       return input.value;
     });
+    var selectedPositions = queryPanelControls(documentRef, '.' + POSITION_FILTER_CLASS + ':checked').map(function (input) {
+      return input.value;
+    });
 
     return normalizeStoredState({
       search: search ? search.value : '',
       playerId: player ? player.value : '',
       setFilters: selectedSets,
+      positionFilters: selectedPositions,
       sortKey: documentRef.body.getAttribute(SORT_KEY_ATTR) || '',
       sortDirection: documentRef.body.getAttribute(SORT_DIR_ATTR) || ''
     });
@@ -1183,6 +1345,18 @@
     return selected;
   }
 
+  function getActivePositionFilters(documentRef) {
+    var selected = queryPanelControls(documentRef, '.' + POSITION_FILTER_CLASS + ':checked').map(function (input) {
+      return normalizePositionShort(input.value);
+    });
+
+    if (!selected.length || selected.indexOf('all') !== -1) {
+      return null;
+    }
+
+    return selected;
+  }
+
   function getSearchQuery(documentRef) {
     var panel = getFilterPanel(documentRef);
     var input = panel ? panel.querySelector('#' + dom.cssEscape(SEARCH_INPUT_ID)) : null;
@@ -1201,6 +1375,9 @@
     var query = getSearchQuery(documentRef);
     var playerId = getSelectedPlayerId(documentRef);
     var setFilters = getActiveSetFilters(documentRef);
+    var positionFilters = getActivePositionFilters(documentRef);
+    var playerOutPosition;
+    var playerInPosition;
     var haystack;
 
     if (query) {
@@ -1215,9 +1392,21 @@
     }
 
     if (setFilters) {
-      return setFilters.every(function (setNumber) {
+      if (!setFilters.every(function (setNumber) {
         return parsed.sets[parseInt(setNumber, 10) - 1];
-      });
+      })) {
+        return false;
+      }
+    }
+
+    if (positionFilters) {
+      playerOutPosition = activePlayerPositionMap[parsed.playerOutId] || '';
+      playerInPosition = activePlayerPositionMap[parsed.playerInId] || '';
+
+      if (positionFilters.indexOf(playerOutPosition) === -1 &&
+        positionFilters.indexOf(playerInPosition) === -1) {
+        return false;
+      }
     }
 
     return true;
@@ -1454,6 +1643,56 @@
     return chip;
   }
 
+  function createPositionFilterChip(documentRef, label, value, checked) {
+    var chip = documentRef.createElement('label');
+    var input = documentRef.createElement('input');
+    var text = documentRef.createElement('span');
+
+    chip.className = 'vtcl-filter-chip';
+    input.className = POSITION_FILTER_CLASS;
+    input.type = 'checkbox';
+    input.value = value;
+    input.checked = checked;
+    text.textContent = label;
+
+    input.addEventListener('change', function () {
+      var panel = getFilterPanel(documentRef);
+      var positionFilters = panel ? panel.querySelectorAll('.' + POSITION_FILTER_CLASS) : [];
+
+      if (value === 'all' && input.checked) {
+        Array.prototype.forEach.call(positionFilters, function (checkbox) {
+          if (checkbox.value !== 'all') {
+            checkbox.checked = false;
+          }
+        });
+      } else if (value !== 'all' && input.checked) {
+        Array.prototype.forEach.call(positionFilters, function (checkbox) {
+          if (checkbox.value === 'all') {
+            checkbox.checked = false;
+          }
+        });
+      } else if (value !== 'all') {
+        var anyPosition = Array.prototype.some.call(positionFilters, function (checkbox) {
+          return checkbox.value !== 'all' && checkbox.checked;
+        });
+
+        if (!anyPosition) {
+          Array.prototype.forEach.call(positionFilters, function (checkbox) {
+            checkbox.checked = checkbox.value === 'all';
+          });
+        }
+      }
+
+      saveCurrentListState(documentRef);
+      applyFilters(documentRef);
+    });
+
+    chip.appendChild(input);
+    chip.appendChild(text);
+
+    return chip;
+  }
+
   function resetFilters(documentRef) {
     var panel = getFilterPanel(documentRef);
     var search = panel ? panel.querySelector('#' + dom.cssEscape(SEARCH_INPUT_ID)) : null;
@@ -1467,6 +1706,10 @@
     }
 
     queryPanelControls(documentRef, '.' + SET_FILTER_CLASS).forEach(function (checkbox) {
+      checkbox.checked = checkbox.value === 'all';
+    });
+
+    queryPanelControls(documentRef, '.' + POSITION_FILTER_CLASS).forEach(function (checkbox) {
       checkbox.checked = checkbox.value === 'all';
     });
 
@@ -1496,7 +1739,9 @@
     var search = panel ? panel.querySelector('#' + dom.cssEscape(SEARCH_INPUT_ID)) : null;
     var player = panel ? panel.querySelector('#' + dom.cssEscape(PLAYER_FILTER_ID)) : null;
     var setFilters = panel ? panel.querySelectorAll('.' + SET_FILTER_CLASS) : [];
+    var positionFilters = panel ? panel.querySelectorAll('.' + POSITION_FILTER_CLASS) : [];
     var selectedSets = normalizeSetFilters(state.setFilters);
+    var selectedPositions = normalizePositionFilters(state.positionFilters);
 
     if (search) {
       search.value = state.search;
@@ -1506,6 +1751,10 @@
 
     Array.prototype.forEach.call(setFilters, function (checkbox) {
       checkbox.checked = selectedSets.indexOf(checkbox.value) !== -1;
+    });
+
+    Array.prototype.forEach.call(positionFilters, function (checkbox) {
+      checkbox.checked = selectedPositions.indexOf(normalizePositionShort(checkbox.value)) !== -1;
     });
 
     if (state.sortKey && state.sortDirection) {
@@ -1598,6 +1847,9 @@
       '  color: #facc15;',
       '  margin-left: auto;',
       '}',
+      '.vtcl-position-status {',
+      '  color: #9fb8c7;',
+      '}',
       '.vtcl-reset {',
       '  padding: 2px 8px;',
       '  border: 1px solid rgba(80, 156, 202, 0.45);',
@@ -1630,6 +1882,7 @@
     var panel = documentRef.createElement('div');
     var rowSearch = documentRef.createElement('div');
     var rowSets = documentRef.createElement('div');
+    var rowPositions = documentRef.createElement('div');
     var rowSort = documentRef.createElement('div');
     var rowBulk = documentRef.createElement('div');
     var searchLabel = documentRef.createElement('span');
@@ -1637,6 +1890,8 @@
     var playerLabel = documentRef.createElement('span');
     var playerSelect = documentRef.createElement('select');
     var setsLabel = documentRef.createElement('span');
+    var positionsLabel = documentRef.createElement('span');
+    var positionStatus = documentRef.createElement('span');
     var sortLabel = documentRef.createElement('span');
     var bulkLabel = documentRef.createElement('span');
     var bulkSelectVisible = documentRef.createElement('button');
@@ -1651,6 +1906,7 @@
 
     rowSearch.className = 'vtcl-filter-row';
     rowSets.className = 'vtcl-filter-row';
+    rowPositions.className = 'vtcl-filter-row';
     rowSort.className = 'vtcl-filter-row';
     rowBulk.className = 'vtcl-filter-row';
 
@@ -1698,6 +1954,17 @@
       rowSets.appendChild(createSetFilterChip(documentRef, String(setNumber), String(setNumber), false));
     }
 
+    positionsLabel.className = 'vtcl-filter-label';
+    positionsLabel.textContent = 'Pozycja:';
+    positionStatus.className = POSITION_STATUS_CLASS;
+    positionStatus.textContent = 'Ładuję pozycje...';
+    rowPositions.appendChild(positionsLabel);
+    rowPositions.appendChild(createPositionFilterChip(documentRef, 'wszystkie', 'all', true));
+    POSITION_OPTIONS.forEach(function (position) {
+      rowPositions.appendChild(createPositionFilterChip(documentRef, position, position, false));
+    });
+    rowPositions.appendChild(positionStatus);
+
     sortLabel.className = 'vtcl-filter-label';
     sortLabel.textContent = 'Sortuj:';
     rowSort.appendChild(sortLabel);
@@ -1742,6 +2009,7 @@
 
     panel.appendChild(rowSearch);
     panel.appendChild(rowSets);
+    panel.appendChild(rowPositions);
     panel.appendChild(rowSort);
     panel.appendChild(rowBulk);
 
@@ -1859,6 +2127,7 @@
     if (enhanceKey === lastEnhanceKey && isPanelMounted(documentRef, listRoot)) {
       ensureBulkCheckboxes(documentRef, listRoot);
       applyFilters(documentRef, listRoot);
+      loadPositionMapForList(documentRef, listRoot);
       return;
     }
 
@@ -1893,6 +2162,7 @@
       rememberListContext(listRoot, signature);
       ensureBulkCheckboxes(documentRef, listRoot);
       restoreFilterPanelState(documentRef, listRoot);
+      loadPositionMapForList(documentRef, listRoot);
       infoLog('panel filtrów aktywny', describeNode(listRoot.scope));
       debugLog('enhanceChangesList: ok', collectDebugStatus(documentRef));
     } finally {
@@ -1914,7 +2184,7 @@
       return;
     }
 
-    infoLog('VM Changes List Enhancer v0.1.9 — debug: localStorage.setItem("vtcl.debug","1")');
+    infoLog('VM Changes List Enhancer v0.2.0 — debug: localStorage.setItem("vtcl.debug","1")');
     debugLog('start');
 
     if (root) {
@@ -1934,6 +2204,7 @@
 
   var api = {
     extractVmBody: extractVmBody,
+    parsePlayerPositionMapFromTacticHtml: parsePlayerPositionMapFromTacticHtml,
     parseChangeRow: parseChangeRow,
     parseChangeRowsFromHtml: parseChangeRowsFromHtml,
     parseChangeRowsFromHtmlRegex: parseChangeRowsFromHtmlRegex,
