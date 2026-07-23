@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VM Individual Tactics Enhancer
 // @namespace    https://vm-manager.org/
-// @version      0.3.1
+// @version      0.3.2
 // @description  Bulk edit, player selection, attribute chips, position presets and dirty-state tracking for VM Manager individual tactics view.
 // @match        *://*.vm-manager.org/*
 // @match        *://vm-manager.org/*
@@ -52,6 +52,7 @@
   var STYLE_ID = 'viti-style';
   var PANEL_ID = 'viti-bulk-panel';
   var SCENARIO_ANCHOR_ID = 'viti-scenario-anchor';
+  var SCENARIO_SELECT_ID = 'viti-scenario-select';
   var NATIVE_SCENARIO_HIDDEN_CLASS = 'viti-native-scenario-hidden';
   var SCENARIO_TABLE_ATTR = 'data-viti-scenario-table';
   var SCENARIO_ROW_ATTR = 'data-viti-scenario-row';
@@ -138,6 +139,7 @@
     positionVisibilityScenario: '',
     selectedPlayerIds: {},
     scenarioSelect: null,
+    scenarioCloneSource: null,
     scenarioPreviousIndex: 0,
     holdTimer: null,
     updateSelectionUi: null,
@@ -255,6 +257,47 @@
       cell.querySelector('input.sector_plus_minus') &&
       /^\d+$/.test(normalizeText(span.textContent))
     );
+  }
+
+  function getNativeScenarioSelect(documentRef) {
+    var selects = Array.prototype.slice.call(documentRef.querySelectorAll('#cup_id')).filter(function (select) {
+      return !select.closest('#' + PANEL_ID) && !select.closest('#' + SCENARIO_ANCHOR_ID);
+    });
+    var visible;
+
+    if (!selects.length) {
+      return null;
+    }
+
+    visible = selects.filter(function (select) {
+      return dom.isVisibleElement(select);
+    });
+
+    if (visible.length) {
+      return visible[visible.length - 1];
+    }
+
+    if (state.scenarioSelect && selects.indexOf(state.scenarioSelect) !== -1) {
+      return state.scenarioSelect;
+    }
+
+    return selects[selects.length - 1];
+  }
+
+  function findIndividualViewRoot(documentRef, select) {
+    var node = select || getNativeScenarioSelect(documentRef);
+
+    while (node && node !== documentRef.body) {
+      if (node.querySelector &&
+          node.querySelector('span.link[onclick*="IndividualSave"], span.link[OnClick*="IndividualSave"]') &&
+          node.querySelector('span[id]')) {
+        return node;
+      }
+
+      node = node.parentElement;
+    }
+
+    return documentRef;
   }
 
   function collectValueSpans(documentRef) {
@@ -519,13 +562,14 @@
   }
 
   function parseIndividualView(documentRef) {
-    var spans = collectValueSpans(documentRef);
+    var select = getNativeScenarioSelect(documentRef);
+    var viewRoot = findIndividualViewRoot(documentRef, select);
+    var spans = collectValueSpans(viewRoot);
     var byPlayer = {};
     var rows = [];
     var columns = [];
     var fieldOrder = [];
-    var labels = parseColumnLabels(documentRef);
-    var select = dom.getVisibleElementById(documentRef, 'cup_id');
+    var labels = parseColumnLabels(viewRoot);
     var scenarioOpt = '';
     var scenarioLabel = '';
     var i;
@@ -608,15 +652,16 @@
   }
 
   function isIndividualTacticsView(documentRef) {
-    var select = dom.getVisibleElementById(documentRef, 'cup_id') || documentRef.querySelector('#cup_id');
+    var select = getNativeScenarioSelect(documentRef);
+    var viewRoot = findIndividualViewRoot(documentRef, select);
     var hasScenarioSelect = Boolean(
       select &&
       select.querySelector('option[value*="Squad&opt="]')
     );
-    var hasSaveLink = dom.queryVisibleAll(documentRef, 'span.link').some(function (link) {
+    var hasSaveLink = dom.queryVisibleAll(viewRoot, 'span.link').some(function (link) {
       return getOnClick(link).indexOf('IndividualSave') !== -1;
     });
-    var hasValueSpans = collectValueSpans(documentRef).length > 0;
+    var hasValueSpans = collectValueSpans(viewRoot).length > 0;
 
     return hasScenarioSelect && (hasValueSpans || hasSaveLink);
   }
@@ -642,8 +687,7 @@
     }
 
     Object.keys(snapshot).forEach(function (spanId) {
-      var nodes = dom.getElementsById(documentRef, spanId);
-      var span = nodes.length ? nodes[0] : null;
+      var span = getSpanById(documentRef, spanId);
 
       if (span && readSpanValue(span) !== snapshot[spanId]) {
         count += 1;
@@ -658,14 +702,18 @@
   }
 
   function getSpanById(documentRef, spanId) {
-    var span = dom.getVisibleElementById(documentRef, spanId);
-    var nodes;
+    var viewRoot = findIndividualViewRoot(documentRef);
+    var nodes = dom.getElementsById(documentRef, spanId).filter(function (node) {
+      return viewRoot === documentRef || viewRoot.contains(node);
+    });
+    var span = nodes.find(function (node) {
+      return dom.isVisibleElement(node);
+    });
 
     if (span) {
       return span;
     }
 
-    nodes = dom.getElementsById(documentRef, spanId);
     return nodes.length ? nodes[0] : null;
   }
 
@@ -1044,7 +1092,9 @@
   }
 
   function findSaveLink(documentRef) {
-    return dom.queryVisibleAll(documentRef, 'span.link').find(function (link) {
+    var viewRoot = findIndividualViewRoot(documentRef);
+
+    return dom.queryVisibleAll(viewRoot, 'span.link').find(function (link) {
       return getOnClick(link).indexOf('IndividualSave') !== -1;
     }) || null;
   }
@@ -1646,7 +1696,8 @@
   }
 
   function findTacticsHeaderTable(documentRef) {
-    var anchorRow = findColumnHeaderAnchor(documentRef);
+    var viewRoot = findIndividualViewRoot(documentRef);
+    var anchorRow = findColumnHeaderAnchor(viewRoot);
     var table;
 
     if (!anchorRow) {
@@ -1979,26 +2030,7 @@
     });
   }
 
-  function ensureScenarioAnchor(documentRef) {
-    var anchor = documentRef.getElementById(SCENARIO_ANCHOR_ID);
-
-    if (!anchor) {
-      anchor = documentRef.createElement('div');
-      anchor.id = SCENARIO_ANCHOR_ID;
-      anchor.style.display = 'none';
-      documentRef.body.appendChild(anchor);
-    }
-
-    return anchor;
-  }
-
   function findNativeScenarioTable(documentRef, select) {
-    var marked = documentRef.querySelector('table[' + SCENARIO_TABLE_ATTR + '="1"]');
-
-    if (marked) {
-      return marked;
-    }
-
     if (!select) {
       return null;
     }
@@ -2047,48 +2079,83 @@
     });
   }
 
-  function mountScenarioSelectInPanel(documentRef, slotNode) {
-    var select = documentRef.querySelector('#cup_id');
+  function mountScenarioSelectInPanel(documentRef, slotNode, statusNode) {
+    var select = getNativeScenarioSelect(documentRef);
+    var clone;
 
     if (!select || !slotNode) {
       return null;
     }
 
-    hideNativeScenarioTable(documentRef, select);
-    slotNode.appendChild(select);
-    select.classList.add('viti-scenario-select');
+    slotNode.querySelectorAll('#' + SCENARIO_SELECT_ID + ', #cup_id').forEach(function (oldSelect) {
+      oldSelect.remove();
+    });
 
-    return select;
+    clone = select.cloneNode(true);
+    clone.id = SCENARIO_SELECT_ID;
+    clone.removeAttribute('onchange');
+    clone.removeAttribute('OnChange');
+    clone.classList.add('viti-scenario-select');
+
+    clone.addEventListener('focus', function () {
+      state.scenarioPreviousIndex = clone.selectedIndex;
+    }, true);
+
+    clone.addEventListener('change', function (event) {
+      if (isDirty(documentRef) &&
+          !root.confirm('Masz niezapisane zmiany. Zmienić scenariusz bez zapisu?')) {
+        clone.selectedIndex = state.scenarioPreviousIndex;
+        event.preventDefault();
+        return;
+      }
+
+      select.selectedIndex = clone.selectedIndex;
+      state.scenarioPreviousIndex = clone.selectedIndex;
+      state.snapshot = null;
+      updateDirtyUi(documentRef, statusNode);
+      select.dispatchEvent(new root.Event('change', { bubbles: true }));
+    });
+
+    hideNativeScenarioTable(documentRef, select);
+    slotNode.appendChild(clone);
+    state.scenarioSelect = select;
+    state.scenarioCloneSource = select;
+
+    return clone;
   }
 
   function unmountScenarioSelectFromPanel(documentRef) {
-    var select = documentRef.querySelector('#cup_id');
-    var panel = documentRef.getElementById(PANEL_ID);
-    var anchor = ensureScenarioAnchor(documentRef);
-
-    if (!select || !panel || !panel.contains(select)) {
-      return;
-    }
-
-    anchor.appendChild(select);
-    select.classList.remove('viti-scenario-select');
+    documentRef.querySelectorAll(
+      '#' + PANEL_ID + ' #' + SCENARIO_SELECT_ID + ', #' + SCENARIO_ANCHOR_ID + ' #cup_id'
+    ).forEach(function (select) {
+      select.remove();
+    });
+    state.scenarioCloneSource = null;
   }
 
-  function ensureScenarioSelectMounted(documentRef) {
+  function ensureScenarioSelectMounted(documentRef, statusNode) {
     var panel = documentRef.getElementById(PANEL_ID);
     var slot = panel && panel.querySelector('.viti-scenario-slot');
-    var select = documentRef.querySelector('#cup_id');
+    var select = getNativeScenarioSelect(documentRef);
+    var clone = slot && slot.querySelector('#' + SCENARIO_SELECT_ID);
 
-    if (!slot || !select || slot.contains(select)) {
+    if (!slot || !select) {
       return;
     }
 
-    mountScenarioSelectInPanel(documentRef, slot);
-    hideNativeScenarioTable(documentRef, select);
+    if (clone && state.scenarioCloneSource === select) {
+      if (clone.value !== select.value) {
+        clone.value = select.value;
+      }
+      hideNativeScenarioTable(documentRef, select);
+      return;
+    }
+
+    mountScenarioSelectInPanel(documentRef, slot, statusNode);
   }
 
   function hookScenarioSelect(documentRef, statusNode) {
-    var select = dom.getVisibleElementById(documentRef, 'cup_id') || documentRef.querySelector('#cup_id');
+    var select = getNativeScenarioSelect(documentRef);
 
     if (!select || select.getAttribute(SIGNATURE_ATTR) === 'hooked') {
       state.scenarioSelect = select;
@@ -2153,7 +2220,10 @@
       return;
     }
 
-    documentRef.body.appendChild(panel);
+    panel.classList.remove('viti-panel-attached');
+    if (panel.parentElement !== documentRef.body) {
+      documentRef.body.appendChild(panel);
+    }
   }
 
   function buildPanel(documentRef, view) {
@@ -2352,7 +2422,7 @@
     };
     refreshSelectionUi();
     syncPositionFilterUi(documentRef);
-    mountScenarioSelectInPanel(documentRef, scenarioSlot);
+    mountScenarioSelectInPanel(documentRef, scenarioSlot, statusNode);
 
     return {
       panel: panel,
@@ -2386,13 +2456,11 @@
   }
 
   function teardownPanelAndRows(documentRef) {
-    var panel = documentRef.getElementById(PANEL_ID);
-
     unmountScenarioSelectFromPanel(documentRef);
 
-    if (panel) {
+    documentRef.querySelectorAll('#' + PANEL_ID).forEach(function (panel) {
       panel.remove();
-    }
+    });
 
     dom.queryVisibleAll(documentRef, '.viti-save-dirty').forEach(function (node) {
       node.classList.remove('viti-save-dirty');
@@ -2403,17 +2471,16 @@
     state.updateSelectionUi = null;
     state.updatePositionFilterUi = null;
     state.scenarioSelect = null;
+    state.scenarioCloneSource = null;
   }
 
   function cleanupIndividualEnhancements(documentRef) {
-    var panel = documentRef.getElementById(PANEL_ID);
-
     unmountScenarioSelectFromPanel(documentRef);
     showNativeScenarioTable(documentRef);
 
-    if (panel) {
+    documentRef.querySelectorAll('#' + PANEL_ID).forEach(function (panel) {
       panel.remove();
-    }
+    });
 
     documentRef.querySelectorAll('.' + HOST_CLASS).forEach(function (host) {
       host.classList.remove(HOST_CLASS);
@@ -2428,6 +2495,7 @@
 
     state.snapshot = null;
     state.scenarioSelect = null;
+    state.scenarioCloneSource = null;
     state.selectedPlayerIds = {};
     state.positionVisibility = {};
     state.positionVisibilityScenario = '';
@@ -2476,7 +2544,6 @@
 
       cancelDeactivateTimer();
       repairWronglyHiddenSpacerRows(documentRef);
-      hideNativeScenarioTable(documentRef, documentRef.querySelector('#cup_id'));
 
       view = parseIndividualView(documentRef);
 
@@ -2489,8 +2556,9 @@
 
       if (existingPanel && existingPanel.getAttribute(SIGNATURE_ATTR) === signature) {
         ensureStyles(documentRef);
-        ensureScenarioSelectMounted(documentRef);
+        insertPanel(documentRef, existingPanel);
         hookScenarioSelect(documentRef, existingPanel.querySelector('.viti-status'));
+        ensureScenarioSelectMounted(documentRef, existingPanel.querySelector('.viti-status'));
         updateDirtyUi(documentRef, existingPanel.querySelector('.viti-status'));
         return;
       }
